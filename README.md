@@ -1,4 +1,4 @@
-# Babysitter Booking Platform Web App
+# Babysitter Booking Platform Web App (Backend)
 
 The Frontend is built using React.js and the backend is built using Node.js and MongoDB database. 
 • It is a work in progress though as I will later on add ratings and reviews to babysitters by users on the app. 
@@ -7,10 +7,10 @@ The Frontend is built using React.js and the backend is built using Node.js and 
 
 ### App Screenshots
 <p>
-   <img src="https://github.com/dmansour2000/nodejsbabysitterbookingplatform/blob/master/Screenshot%202025-01-15%20at%204.53.39%E2%80%AFAM.png", width="500" hspace="4"/>
+   <img src="https://github.com/dmansour2000/dmansour2000-nodejsbabysitterbookingplatformbackend/blob/main/Screenshot%202025-01-15%20at%204.53.39%E2%80%AFAM.png", width="500" hspace="4"/>
 </p>
 
-## Heroku WebApp Link 
+## Github Pages Link 
 [https://babysitter-booking-af7cbf57133b.herokuapp.com](https://babysitter-booking-af7cbf57133b.herokuapp.com)
 
 ## Available Scripts
