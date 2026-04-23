@@ -11,7 +11,7 @@ The Frontend is built using React.js and the backend is built using Node.js and 
 </p>
 
 ## Github Pages Link 
-[https://dmansour2000.github.io/nodejsbabysitterbookingplatformfrontend](https://dmansour2000.github.io/nodejsbabysitterbookingplatformfrontend)
+[https://dmansour2000.github.io/reactjsbabysitterbookingplatformfrontend](https://dmansour2000.github.io/reactjsbabysitterbookingplatformfrontend)
 
 ## Available Scripts
 
