@@ -24,9 +24,9 @@ mongoose.connect(process.env.MONGO_URI)
     
 
 // Define routes
-app.use('/user', require('./routes/user'));
-app.use('/babysitter', require('./routes/babysitter'));
-app.use('/admin', require('./routes/admin'));
+app.use('/api/user', require('./routes/user'));
+app.use('/api/babysitter', require('./routes/babysitter'));
+app.use('/api/admin', require('./routes/admin'));
 
 const PORT = process.env.PORT || 5170;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
