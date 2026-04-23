@@ -6,8 +6,8 @@ const User = require('./models/User'); // Adjust the path as necessary
 async function createSuperUser() {
     await mongoose.connect(process.env.MONGO_URI);
 
-    const username = 'superadmin';
-    const password = 'SuperSecretPassword123';
+    const username = 'admin';
+    const password = '12345';
     const role = 'admin';
     const isSuperUser = true; // Custom flag for super user
 
