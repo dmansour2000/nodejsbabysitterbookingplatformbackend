@@ -142,19 +142,44 @@ router.get('/babysitters', auth, adminAuth, async (req, res) => {
 });
 
 // Admin-only document retrieval. Paths and filenames are never returned to clients.
-router.get('/babysitters/:id/documents/:kind', auth, adminAuth, async (req, res) => {
+const handleGetSitterDocument = async (req, res) => {
     const fieldByKind = { photo: 'photoFile', nationalId: 'nationalIdFile', passport: 'passportFile', residency: 'residencyFile' };
     const field = fieldByKind[req.params.kind];
     if (!field || !mongoose.Types.ObjectId.isValid(req.params.id)) return res.sendStatus(404);
     try {
-        const sitter = await Babysitter.findById(req.params.id).select(`+${field}`);
+        let sitter = await Babysitter.findById(req.params.id).select(`+${field}`);
+        if (!sitter) {
+            sitter = await Babysitter.findOne({ userId: req.params.id }).select(`+${field}`);
+        }
         const filename = sitter?.[field];
-        if (!filename) return res.sendStatus(404);
+        if (!filename) return res.status(404).json({ msg: 'No document on file' });
         const filePath = path.join(privateDir, path.basename(filename));
+        if (!fs.existsSync(filePath)) {
+            return res.status(404).json({ msg: 'Document file not found on disk' });
+        }
         res.setHeader('Cache-Control', 'private, no-store');
         res.setHeader('X-Content-Type-Options', 'nosniff');
-        res.sendFile(filePath, (err) => { if (err && !res.headersSent) res.sendStatus(404); });
+
+        const ext = path.extname(filePath).toLowerCase();
+        const mimeTypes = {
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.png': 'image/png',
+            '.webp': 'image/webp',
+            '.pdf': 'application/pdf',
+        };
+        if (mimeTypes[ext]) {
+            res.setHeader('Content-Type', mimeTypes[ext]);
+        }
+
+        res.sendFile(filePath, (err) => { if (err && !res.headersSent) res.status(404).json({ msg: 'Error sending file' }); });
     } catch (_) { res.sendStatus(404); }
+};
+
+router.get('/babysitters/:id/documents/:kind', auth, adminAuth, handleGetSitterDocument);
+router.get('/babysitters/:id/photo', auth, adminAuth, (req, res, next) => {
+    req.params.kind = 'photo';
+    handleGetSitterDocument(req, res, next);
 });
 
 router.patch('/babysitters/:id/moderation', auth, adminAuth, async (req, res) => {
