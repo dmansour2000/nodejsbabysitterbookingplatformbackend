@@ -11,7 +11,7 @@ const BabysitterSchema = new mongoose.Schema({
     bio: { type: String, trim: true, maxlength: 1500 },
     monthlySalary: { type: Number, min: 0, max: 10000000 },
     currency: { type: String, enum: ['EGP', 'USD'], default: 'EGP' },
-    services: { type: [String], enum: ['cleaning', 'babysitting', 'cooking', 'studying'], default: [] },
+    services: { type: [String], enum: ['cleaning', 'babysitting', 'cooking', 'elderlyCare'], default: [] },
     available: { type: Boolean, default: true },
     moderationStatus: { type: String, enum: ['pending', 'approved', 'unapproved', 'blacklisted'], default: 'pending', index: true },
     hasAcceptedBooking: { type: Boolean, default: false, index: true },

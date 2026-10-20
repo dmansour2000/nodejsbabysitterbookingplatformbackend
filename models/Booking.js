@@ -13,13 +13,14 @@ const BookingSchema = new mongoose.Schema({
     },
     service: {
         type: String,
-        enum: ['cleaning', 'babysitting', 'cooking', 'studying'],
+        enum: ['cleaning', 'babysitting', 'cooking', 'studying', 'elderlyCare'],
         required: true
     },
     startAt: { type: Date, required: true },
     endAt: { type: Date, required: true },
     childrenCount: { type: Number, min: 1, max: 10, required: true },
     notes: { type: String, maxlength: 1000, default: '' },
+    caregiverNotes: { type: String, maxlength: 1000, default: '' },
     status: {
         type: String,
         enum: ['pending', 'accepted', 'declined', 'cancelled'],

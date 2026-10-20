@@ -76,6 +76,32 @@ router.get('/users', auth, async (req, res) => {
 });
 
 
+// Return account-specific details for the admin account dialog.
+router.get('/users/:id/details', auth, adminAuth, async (req, res) => {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ msg: 'Invalid ID format' });
+    try {
+        const user = await User.findById(req.params.id).select('-password').lean();
+        if (!user) return res.status(404).json({ msg: 'User not found' });
+        if (user.role === 'admin' && !req.currentUser.isSuperUser) return res.status(403).json({ msg: 'Only a super user can view admin accounts' });
+        if (user.role === 'user') {
+            const bookings = await Booking.find({ parentId: user._id }).populate({ path: 'babysitterId', select: 'name' }).sort({ createdAt: -1 }).lean();
+            return res.json({ user, requests: bookings.map((booking) => ({ ...booking, babysitterName: booking.babysitterId?.name || null })) });
+        }
+        if (user.role === 'babysitter') {
+            const profile = await Babysitter.findOne({ userId: user._id }).select('+photoFile +nationalIdFile +passportFile +residencyFile').lean();
+            if (!profile) return res.json({ user, profile: null, profileId: null, documents: {} });
+            const documents = { photo: !!profile.photoFile, nationalId: !!profile.nationalIdFile, passport: !!profile.passportFile, residency: !!profile.residencyFile };
+            for (const field of ['photoFile', 'nationalIdFile', 'passportFile', 'residencyFile']) delete profile[field];
+            return res.json({ user, profile, profileId: profile._id, documents });
+        }
+        return res.json({ user });
+    } catch (err) {
+        console.error('Could not load account details:', err.message);
+        return res.status(500).json({ msg: 'Server error' });
+    }
+});
+
+
 
 // Remove a user
 router.delete('/users/:id', auth, adminAuth, async (req, res) => {
@@ -104,8 +130,8 @@ router.delete('/users/:id', auth, adminAuth, async (req, res) => {
 // Get all babysitters
 router.get('/babysitters', auth, adminAuth, async (req, res) => {
     try {
-        const babysitters = await Babysitter.find().select('+nationalIdFile +passportFile +residencyFile').populate('userId', 'username');
-        res.json(babysitters.map((sitter) => ({ ...sitter.toObject(), verificationDocuments: { nationalId: !!sitter.nationalIdFile, passport: !!sitter.passportFile, residency: !!sitter.residencyFile }, nationalIdFile: undefined, passportFile: undefined, residencyFile: undefined, photoFile: undefined })));
+        const babysitters = await Babysitter.find().select('+photoFile +nationalIdFile +passportFile +residencyFile').populate('userId', 'username email');
+        res.json(babysitters.map((sitter) => ({ ...sitter.toObject(), verificationDocuments: { photo: !!sitter.photoFile, nationalId: !!sitter.nationalIdFile, passport: !!sitter.passportFile, residency: !!sitter.residencyFile }, nationalIdFile: undefined, passportFile: undefined, residencyFile: undefined, photoFile: undefined })));
     } catch (err) {
         res.status(500).send('Server error');
     }
@@ -113,7 +139,7 @@ router.get('/babysitters', auth, adminAuth, async (req, res) => {
 
 // Admin-only document retrieval. Paths and filenames are never returned to clients.
 router.get('/babysitters/:id/documents/:kind', auth, adminAuth, async (req, res) => {
-    const fieldByKind = { nationalId: 'nationalIdFile', passport: 'passportFile', residency: 'residencyFile' };
+    const fieldByKind = { photo: 'photoFile', nationalId: 'nationalIdFile', passport: 'passportFile', residency: 'residencyFile' };
     const field = fieldByKind[req.params.kind];
     if (!field || !mongoose.Types.ObjectId.isValid(req.params.id)) return res.sendStatus(404);
     try {

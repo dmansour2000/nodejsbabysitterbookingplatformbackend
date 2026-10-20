@@ -6,7 +6,7 @@ const Babysitter = require('../models/Babysitter');
 const User = require('../models/User');
 
 const router = express.Router();
-const allowedServices = ['cleaning', 'babysitting', 'cooking', 'studying'];
+const allowedServices = ['cleaning', 'babysitting', 'cooking', 'elderlyCare'];
 
 function auth(req, res, next) {
     const authorization = req.header('Authorization');
@@ -38,6 +38,26 @@ function populated(query) {
         .populate('parentId', 'username name')
         .populate({ path: 'babysitterId', select: 'name phone services userId', populate: { path: 'userId', select: 'username' } })
         .sort({ startAt: 1 });
+}
+
+function parseDateOnly(value) {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+    const date = new Date(value + 'T00:00:00.000Z');
+    return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value ? date : null;
+}
+
+async function syncAcceptedBookingAvailability(sitterId) {
+    const hasActiveAcceptedBooking = await Booking.exists({
+        babysitterId: sitterId,
+        status: 'accepted',
+        endAt: { $gt: new Date() }
+    });
+    await Babysitter.updateOne({ _id: sitterId }, {
+        $set: {
+            hasAcceptedBooking: Boolean(hasActiveAcceptedBooking),
+            available: !hasActiveAcceptedBooking
+        }
+    });
 }
 
 router.get('/', auth, currentAccount, async (req, res) => {
@@ -74,11 +94,16 @@ router.post('/', auth, currentAccount, async (req, res) => {
         return res.status(400).json({ msg: 'Choose a valid service' });
     }
 
-    const starts = new Date(startAt);
-    const ends = new Date(endAt);
+    const starts = parseDateOnly(startAt);
+    const selectedEndDate = parseDateOnly(endAt);
+    const ends = selectedEndDate
+        ? new Date(selectedEndDate.getTime() + 24 * 60 * 60 * 1000 - 1)
+        : null;
     const count = Number(childrenCount);
-    if (!Number.isFinite(starts.getTime()) || !Number.isFinite(ends.getTime()) || starts <= new Date() || ends <= starts) {
-        return res.status(400).json({ msg: 'Choose a future start and an end time after the start' });
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+    if (!starts || !ends || starts <= today || ends < starts) {
+        return res.status(400).json({ msg: 'Choose a future start date and an end date on or after it' });
     }
     if (!Number.isInteger(count) || count < 1 || count > 10) {
         return res.status(400).json({ msg: 'Children count must be between 1 and 10' });
@@ -125,7 +150,7 @@ router.post('/', auth, currentAccount, async (req, res) => {
 
 router.patch('/:id/status', auth, currentAccount, async (req, res) => {
     const { status } = req.body;
-    if (!['accepted', 'declined', 'cancelled'].includes(status)) {
+    if (!['accepted', 'declined', 'cancelled', 'pending'].includes(status)) {
         return res.status(400).json({ msg: 'Unsupported booking status' });
     }
     if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
@@ -137,42 +162,110 @@ router.patch('/:id/status', auth, currentAccount, async (req, res) => {
         if (!booking) return res.status(404).json({ msg: 'Booking not found' });
 
         if (req.account.role === 'user') {
-            if (!booking.parentId.equals(req.account._id) || status !== 'cancelled') {
+            if (!booking.parentId.equals(req.account._id)) {
                 return res.status(403).json({ msg: 'You cannot change this booking' });
             }
-            if (!['pending', 'accepted'].includes(booking.status)) {
-                return res.status(409).json({ msg: 'This booking can no longer be cancelled' });
+            if (status === 'cancelled') {
+                if (!['pending', 'accepted'].includes(booking.status)) {
+                    return res.status(409).json({ msg: 'This booking can no longer be cancelled' });
+                }
+            } else if (status === 'pending') {
+                if (booking.status !== 'cancelled') {
+                    return res.status(409).json({ msg: 'Only cancelled requests can be reactivated' });
+                }
+                if (booking.startAt <= new Date()) {
+                    return res.status(409).json({ msg: 'The booking time has already started' });
+                }
+                const sitter = await Babysitter.findById(booking.babysitterId).select('available moderationStatus hasAcceptedBooking');
+                if (!sitter || !sitter.available || sitter.moderationStatus !== 'approved' || sitter.hasAcceptedBooking) {
+                    return res.status(409).json({ msg: 'The caregiver is not currently available' });
+                }
+                const conflict = await Booking.exists({
+                    _id: { $ne: booking._id },
+                    babysitterId: booking.babysitterId,
+                    status: { $in: ['pending', 'accepted'] },
+                    startAt: { $lt: booking.endAt },
+                    endAt: { $gt: booking.startAt }
+                });
+                if (conflict) return res.status(409).json({ msg: 'This request conflicts with another active booking' });
+            } else {
+                return res.status(403).json({ msg: 'You cannot change this booking' });
             }
         } else if (req.account.role === 'babysitter') {
             const profile = await Babysitter.findOne({ userId: req.account._id }).select('_id');
-            if (!profile || !booking.babysitterId.equals(profile._id) || !['accepted', 'declined'].includes(status)) {
+            if (!profile || !booking.babysitterId.equals(profile._id)) {
                 return res.status(403).json({ msg: 'You cannot change this booking' });
             }
-            if (booking.status !== 'pending') {
-                return res.status(409).json({ msg: 'Only pending requests can be accepted or declined' });
+
+            if (status === 'pending') {
+                if (booking.status !== 'accepted') {
+                    return res.status(409).json({ msg: 'Only accepted requests can have their approval withdrawn' });
+                }
+            } else {
+                if (!['accepted', 'declined'].includes(status)) {
+                    return res.status(403).json({ msg: 'You cannot change this booking' });
+                }
+                if (booking.status !== 'pending') {
+                    return res.status(409).json({ msg: 'Only pending requests can be accepted or declined' });
+                }
             }
             if (status === 'accepted') {
                 const overlap = await Booking.exists({
                     _id: { $ne: booking._id },
                     babysitterId: profile._id,
                     status: 'accepted',
-                    startAt: { $lt: booking.endAt },
-                    endAt: { $gt: booking.startAt }
+                    endAt: { $gt: new Date() }
                 });
-                if (overlap) return res.status(409).json({ msg: 'This time conflicts with an accepted booking' });
+                if (overlap) return res.status(409).json({ msg: 'Another booking is already approved' });
             }
         } else {
             return res.status(403).json({ msg: 'You cannot change this booking' });
         }
 
+        const previousStatus = booking.status;
+        if (status === 'accepted') {
+            const caregiverNotes = req.body.caregiverNotes ?? '';
+            if (typeof caregiverNotes !== 'string' || caregiverNotes.length > 1000) {
+                return res.status(400).json({ msg: 'Caregiver note must be 1000 characters or fewer' });
+            }
+            booking.caregiverNotes = caregiverNotes.trim();
+        } else if (previousStatus === 'accepted' && status === 'pending') {
+            booking.caregiverNotes = '';
+        }
         booking.status = status;
         await booking.save();
-        if (status === 'accepted') await Babysitter.updateOne({ _id: booking.babysitterId }, { $set: { hasAcceptedBooking: true, available: false } });
+        if (status === 'accepted' || previousStatus === 'accepted') {
+            await syncAcceptedBookingAvailability(booking.babysitterId);
+        }
         const result = await populated(Booking.findById(booking._id));
         res.json(result);
     } catch (err) {
         console.error('Unable to update booking:', err.message);
         res.status(500).json({ msg: 'Unable to update booking' });
+    }
+});
+
+router.delete('/:id', auth, currentAccount, async (req, res) => {
+    if (req.account.role !== 'user') {
+        return res.status(403).json({ msg: 'Only the family that created a request can delete it' });
+    }
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+        return res.status(400).json({ msg: 'Invalid booking ID' });
+    }
+
+    try {
+        const booking = await Booking.findOneAndDelete({
+            _id: req.params.id,
+            parentId: req.account._id
+        });
+        if (!booking) return res.status(404).json({ msg: 'Booking request not found' });
+        if (booking.status === 'accepted') {
+            await syncAcceptedBookingAvailability(booking.babysitterId);
+        }
+        res.json({ msg: 'Booking request deleted' });
+    } catch (err) {
+        console.error('Unable to delete booking:', err.message);
+        res.status(500).json({ msg: 'Unable to delete booking request' });
     }
 });
 
