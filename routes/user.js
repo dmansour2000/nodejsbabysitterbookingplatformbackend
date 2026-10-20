@@ -138,14 +138,14 @@ router.post('/oauth/nonce', (req, res) => {
 
 // Verify a Google ID token and create or sign in to a user account.
 router.post('/oauth', async (req, res) => {
-    const { provider, credential, role = 'user', nonce } = req.body || {};
+    const { provider, credential, flow = 'login', nonce } = req.body || {};
     const clientId = process.env.GOOGLE_CLIENT_ID;
     if (provider !== 'google') return res.status(400).json({ msg: 'Unsupported social sign-in provider' });
     if (!clientId) return res.status(503).json({ msg: 'Social sign-in provider is not configured' });
     if (typeof credential !== 'string' || typeof nonce !== 'string') {
         return res.status(400).json({ msg: 'A Google credential and sign-in nonce are required' });
     }
-    if (!['user', 'babysitter'].includes(role)) return res.status(400).json({ msg: 'Choose a valid account type' });
+    if (!['login', 'register'].includes(flow)) return res.status(400).json({ msg: 'Choose a valid sign-in flow' });
 
     try {
         const nonceClaims = jwt.verify(nonce, process.env.JWT_SECRET);
@@ -181,37 +181,31 @@ router.post('/oauth', async (req, res) => {
                 return res.status(409).json({ msg: 'Email is already registered to another account' });
             }
             user = matchingUsers[0] || null;
-            if (user?.role === 'admin') {
-                return res.status(409).json({ msg: 'Email is already registered to another account' });
-            }
-            if (user?.googleId && user.googleId !== claims.sub) {
+            if (user?.role === 'admin' || (user?.googleId && user.googleId !== claims.sub)) {
                 return res.status(409).json({ msg: 'Email is already registered to another account' });
             }
 
             if (user) {
+                // Google has verified this email, so link it to the matching existing account.
                 user.googleId = claims.sub;
                 user.email = email;
                 if (!user.name && claims.name) user.name = claims.name;
                 await user.save();
-            } else {
-                const localPart = (email.split('@')[0] || 'google-user').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 40) || 'google-user';
-                let username = localPart;
-                while (await User.exists({ username })) {
-                    username = `${localPart}-${crypto.randomBytes(3).toString('hex')}`;
-                }
-
-                user = new User({
-                    username,
-                    name: typeof claims.name === 'string' ? claims.name.trim() : '',
+            } else if (flow === 'register') {
+                const registrationToken = jwt.sign({
+                    purpose: 'google-registration',
+                    provider: 'google',
+                    sub: claims.sub,
                     email,
-                    googleId: claims.sub,
-                    role,
+                    name: typeof claims.name === 'string' ? claims.name.trim().slice(0, 100) : '',
+                }, process.env.JWT_SECRET, { expiresIn: '10m' });
+                return res.json({
+                    registrationRequired: true,
+                    registrationToken,
+                    googleUser: { email, name: typeof claims.name === 'string' ? claims.name.trim() : '' },
                 });
-                await user.save();
-
-                if (role === 'babysitter') {
-                    await new Babysitter({ userId: user.id, name: user.name }).save();
-                }
+            } else {
+                return res.status(404).json({ msg: 'No account was found for this Google account. Register first.' });
             }
         }
 
@@ -227,6 +221,68 @@ router.post('/oauth', async (req, res) => {
         }
         console.error('Google sign-in account handling failed:', err.message);
         return res.status(500).json({ msg: 'Could not complete Google sign-in. Please try again.' });
+    }
+});
+
+
+// Finish a Google sign-up only after the person chooses their CareNest account type.
+router.post('/oauth/complete-registration', async (req, res) => {
+    const { registrationToken, role } = req.body || {};
+    if (typeof registrationToken !== 'string' || !['user', 'babysitter'].includes(role)) {
+        return res.status(400).json({ msg: 'A valid registration token and account type are required' });
+    }
+
+    try {
+        const pending = jwt.verify(registrationToken, process.env.JWT_SECRET);
+        if (pending.purpose !== 'google-registration' || pending.provider !== 'google' || !pending.sub || !pending.email) {
+            return res.status(401).json({ msg: 'Google registration session is invalid or expired' });
+        }
+
+        let user = await User.findOne({ googleId: pending.sub });
+        if (!user) {
+            const matchingUsers = await User.find({ email: pending.email }).limit(2);
+            if (matchingUsers.length > 1 || matchingUsers[0]?.role === 'admin') {
+                return res.status(409).json({ msg: 'Email is already registered to another account' });
+            }
+            user = matchingUsers[0] || null;
+            if (user) {
+                user.googleId = pending.sub;
+                user.email = pending.email;
+                if (!user.name && pending.name) user.name = pending.name;
+                await user.save();
+            } else {
+                const localPart = (pending.email.split('@')[0] || 'google-user').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 40) || 'google-user';
+                let username = localPart;
+                while (await User.exists({ username })) {
+                    username = `${localPart}-${crypto.randomBytes(3).toString('hex')}`;
+                }
+
+                user = new User({
+                    username,
+                    name: pending.name || localPart,
+                    email: pending.email,
+                    googleId: pending.sub,
+                    role,
+                });
+                await user.save();
+                if (role === 'babysitter') {
+                    await new Babysitter({ userId: user.id, name: user.name }).save();
+                }
+            }
+        }
+
+        const payload = { user: { id: user.id, role: user.role, isSuperUser: user.isSuperUser } };
+        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
+        return res.json({ token, user: payload.user });
+    } catch (err) {
+        if (err.name === 'TokenExpiredError' || err.name === 'JsonWebTokenError') {
+            return res.status(401).json({ msg: 'Google registration session is invalid or expired' });
+        }
+        if (err.code === 11000) {
+            return res.status(409).json({ msg: 'Email is already registered to another account' });
+        }
+        console.error('Google registration failed:', err.message);
+        return res.status(500).json({ msg: 'Could not finish Google registration. Please try again.' });
     }
 });
 

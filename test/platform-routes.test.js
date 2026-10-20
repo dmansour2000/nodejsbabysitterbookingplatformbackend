@@ -11,6 +11,7 @@ const parentId = '64a000000000000000000010';
 const caregiverUserId = '64a000000000000000000011';
 const caregiverProfileId = '64a000000000000000000012';
 let loginUser = { id: parentId, _id: parentId, username: 'family', role: 'user', password: 'hashed-password' };
+let googlePayload = null;
 let comparePassword = true;
 let publicProfiles = [];
 let detailedProfile = null;
@@ -20,13 +21,15 @@ let detailHasAcceptedBooking = false;
 const acceptedCaregiverIds = [caregiverProfileId];
 
 const userModel = {
-  findOne: async () => loginUser,
+  findOne: async (filter = {}) => filter.username ? loginUser : null,
+  find: () => ({ limit: async () => [] }),
   findById: () => ({ select: async () => ({ _id: parentId, id: parentId, role: 'user', username: 'family', name: 'Family' }) }),
 };
 const userRouter = proxyquire('../routes/user', {
   '../models/User': userModel,
   '../models/Babysitter': {},
   '../models/Booking': {},
+  'google-auth-library': { OAuth2Client: class { async verifyIdToken() { return { getPayload: () => googlePayload }; } } },
   bcryptjs: { compare: async (candidate) => comparePassword && candidate === 'correct-password' },
 });
 const userApp = express();
@@ -121,6 +124,38 @@ test('Google OAuth rejects credentials without a valid nonce before token verifi
 
   assert.equal(response.status, 401);
   assert.equal(response.body.msg, 'Google sign-in nonce is invalid or expired');
+});
+
+
+test('new Google registrants receive a pending registration token before choosing an account type', async () => {
+  const nonceResponse = await request(userApp)
+    .post('/api/user/oauth/nonce')
+    .send({ provider: 'google' });
+  googlePayload = {
+    sub: 'google-user-subject',
+    email: 'new-google-user@example.com',
+    email_verified: true,
+    name: 'New Google User',
+    nonce: nonceResponse.body.nonce,
+  };
+
+  const response = await request(userApp)
+    .post('/api/user/oauth')
+    .send({ provider: 'google', flow: 'register', credential: 'verified-google-token', nonce: nonceResponse.body.nonce });
+
+  assert.equal(response.status, 200);
+  assert.equal(response.body.registrationRequired, true);
+  const claims = jwt.verify(response.body.registrationToken, process.env.JWT_SECRET);
+  assert.equal(claims.purpose, 'google-registration');
+  assert.equal(claims.email, 'new-google-user@example.com');
+});
+
+test('Google registration completion requires a supported account type', async () => {
+  const response = await request(userApp)
+    .post('/api/user/oauth/complete-registration')
+    .send({ registrationToken: 'pending-token', role: 'admin' });
+
+  assert.equal(response.status, 400);
 });
 
 test('family registration enforces a minimum password length', async () => {
