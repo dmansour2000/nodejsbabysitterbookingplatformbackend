@@ -1,0 +1,264 @@
+const express = require('express');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const User = require('../models/User');
+const Babysitter = require('../models/Babysitter');
+const mongoose = require('mongoose');
+const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const Booking = require('../models/Booking');
+
+const privateDir = path.join(__dirname, '..', 'private_uploads');
+fs.mkdirSync(privateDir, { recursive: true, mode: 0o700 });
+const upload = multer({
+    storage: multer.diskStorage({ destination: privateDir, filename: (_req, file, cb) => { const ext = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'application/pdf': '.pdf' }[file.mimetype] || ''; cb(null, `${crypto.randomBytes(24).toString('hex')}${ext}`); } }),
+    limits: { fileSize: 5 * 1024 * 1024, files: 4 },
+    fileFilter: (_req, file, cb) => { const photo = file.fieldname === 'photo'; const ok = photo ? /^image\/(jpeg|png|webp)$/.test(file.mimetype) : /^(image\/(jpeg|png|webp)|application\/pdf)$/.test(file.mimetype); cb(ok ? null : new Error(photo ? 'Profile photo must be JPG, PNG, or WebP' : 'Only JPG, PNG, WebP, or PDF documents are accepted'), ok); }
+});
+const documentUpload = upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'nationalId', maxCount: 1 }, { name: 'passport', maxCount: 1 }, { name: 'residency', maxCount: 1 }]);
+
+
+const router = express.Router();
+
+
+function auth(req, res, next) {
+    const authorization = req.header('Authorization');
+    const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : null;
+
+    if (!token) {
+        return res.status(401).json({ msg: 'No token, authorization denied' });
+    }
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        req.user = decoded.user;
+        next();
+    } catch (err) {
+        res.status(401).json({ msg: 'Token is not valid' });
+    }
+}
+
+
+// Read the signed-in babysitter's own profile.
+router.get('/profile', auth, async (req, res) => {
+    if (req.user.role !== 'babysitter') {
+        return res.status(403).json({ msg: 'Access denied' });
+    }
+    try {
+        const babysitter = await Babysitter.findOne({ userId: req.user.id }).select('+nationalIdFile +passportFile +residencyFile');
+        if (!babysitter) return res.status(404).json({ msg: 'Babysitter profile not found' });
+        const profile = babysitter.toObject();
+        profile.verificationDocuments = { nationalId: !!profile.nationalIdFile, passport: !!profile.passportFile, residency: !!profile.residencyFile };
+        delete profile.nationalIdFile; delete profile.passportFile; delete profile.residencyFile; delete profile.photoFile;
+        res.json(profile);
+    } catch (err) {
+        res.status(500).json({ msg: 'Unable to load profile' });
+    }
+});
+
+// Update babysitter profile
+router.put('/profile', auth, async (req, res) => {
+    if (req.user.role !== 'babysitter') {
+        return res.status(403).json({ msg: 'Access denied' });
+    }
+    const { phone, age, nationality, nationalityType, city, bio, monthlySalary, currency, services } = req.body;
+    if (nationalityType !== undefined && !['egyptian', 'other'].includes(nationalityType)) return res.status(400).json({ msg: 'Choose a valid nationality document category' });
+    if (currency !== undefined && !['EGP', 'USD'].includes(currency)) return res.status(400).json({ msg: 'Currency must be EGP or USD' });
+    if (monthlySalary !== undefined && (!Number.isFinite(Number(monthlySalary)) || Number(monthlySalary) < 0)) return res.status(400).json({ msg: 'Monthly salary must be a non-negative number' });
+    if (services !== undefined && (!Array.isArray(services) || services.some((service) => !['cleaning', 'babysitting', 'cooking', 'studying'].includes(service)))) {
+        return res.status(400).json({ msg: 'Choose valid services' });
+    }
+    if (bio !== undefined && (typeof bio !== 'string' || bio.length > 1500)) {
+        return res.status(400).json({ msg: 'Bio must be 1500 characters or fewer' });
+    }
+
+    try {
+        // Find the babysitter profile by user ID
+        const babysitter = await Babysitter.findOne({ userId: req.user.id });
+
+        if (!babysitter) {
+            return res.status(404).json({ msg: 'Babysitter profile not found' });
+        }
+
+        // Update the profile fields
+        if (phone !== undefined) babysitter.phone = phone;
+        if (age !== undefined) babysitter.age = age;
+        if (nationality !== undefined) babysitter.nationality = nationality;
+        if (nationalityType !== undefined && babysitter.nationalityType !== nationalityType) { babysitter.nationalityType = nationalityType; babysitter.moderationStatus = 'pending'; }
+        if (currency !== undefined) babysitter.currency = currency;
+        if (city !== undefined) babysitter.city = city;
+        if (bio !== undefined) babysitter.bio = bio;
+        if (monthlySalary !== undefined) babysitter.monthlySalary = Number(monthlySalary);
+        if (services !== undefined) babysitter.services = services;
+
+        // Save the updated profile
+        await babysitter.save();
+
+        res.json({ msg: 'Profile updated successfully', babysitter });
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server error');
+    }
+});
+
+
+// Let a babysitter pause or resume incoming requests.
+router.patch('/availability', auth, async (req, res) => {
+    if (req.user.role !== 'babysitter') {
+        return res.status(403).json({ msg: 'Access denied' });
+    }
+    if (typeof req.body.available !== 'boolean') {
+        return res.status(400).json({ msg: 'Availability must be true or false' });
+    }
+    try {
+        const babysitter = await Babysitter.findOneAndUpdate(
+            { userId: req.user.id },
+            { available: req.body.available },
+            { new: true, runValidators: true }
+        );
+        if (!babysitter) return res.status(404).json({ msg: 'Babysitter profile not found' });
+        res.json(babysitter);
+    } catch (err) {
+        res.status(500).json({ msg: 'Unable to update availability' });
+    }
+});
+
+
+// An optional public photo is served only for an approved, searchable profile.
+router.get('/photo/:id', async (req, res) => {
+    try {
+        const sitter = await Babysitter.findOne({ _id: req.params.id, moderationStatus: 'approved', available: true, hasAcceptedBooking: { $ne: true } }).select('+photoFile');
+        if (!sitter || !sitter.photoFile || await Booking.exists({ babysitterId: sitter._id, status: 'accepted' })) return res.sendStatus(404);
+        res.sendFile(path.join(privateDir, sitter.photoFile));
+    } catch (_) { res.sendStatus(404); }
+});
+
+// Upload identity files to private storage; every new submission returns to admin review.
+router.post('/profile/documents', auth, (req, res, next) => {
+    if (req.user.role !== 'babysitter') return res.status(403).json({ msg: 'Access denied' });
+    documentUpload(req, res, (err) => err ? res.status(400).json({ msg: err.message || 'Upload failed' }) : next());
+}, async (req, res) => {
+    const files = req.files || {};
+    try {
+        const sitter = await Babysitter.findOne({ userId: req.user.id }).select('+photoFile +nationalIdFile +passportFile +residencyFile');
+        if (!sitter) { Object.values(files).flat().forEach((f) => fs.unlink(f.path, () => {})); return res.status(404).json({ msg: 'Babysitter profile not found' }); }
+        const replace = (key, field) => { if (!files[key]?.[0]) return; if (sitter[field]) fs.unlink(path.join(privateDir, sitter[field]), () => {}); sitter[field] = files[key][0].filename; };
+        replace('photo', 'photoFile'); replace('nationalId', 'nationalIdFile'); replace('passport', 'passportFile'); replace('residency', 'residencyFile');
+        if (files.photo?.length && !files.photo[0].mimetype.startsWith('image/')) return res.status(400).json({ msg: 'Profile photo must be an image' });
+        sitter.moderationStatus = 'pending'; await sitter.save();
+        res.json({ msg: 'Documents uploaded for review', moderationStatus: sitter.moderationStatus });
+    } catch (err) { Object.values(files).flat().forEach((f) => fs.unlink(f.path, () => {})); res.status(500).json({ msg: 'Unable to save uploaded documents' }); }
+});
+
+// Get all available babysitters
+router.get('/', async (req, res) => {
+    try {
+        const acceptedIds = await Booking.distinct('babysitterId', { status: 'accepted' });
+        const babysitters = await Babysitter.find({ available: true, moderationStatus: 'approved', hasAcceptedBooking: { $ne: true }, _id: { $nin: acceptedIds } }).select('+photoFile -nationalIdFile -passportFile -residencyFile -__v');
+        res.json(babysitters.map((sitter) => ({ ...sitter.toObject(), photoUrl: sitter.photoFile ? `/api/babysitter/photo/${sitter._id}` : null, photoFile: undefined }))); 
+    } catch (err) {
+        res.status(500).send('Server error');
+    }
+});
+
+// Get a babysitter
+router.get('/users/:id', auth, async (req, res) => {
+    try {
+        const user = await Babysitter.findOne({ userId: req.params.id, moderationStatus: 'approved', available: true, hasAcceptedBooking: { $ne: true } }).select('+photoFile -nationalIdFile -passportFile -residencyFile -__v');
+        if (!user) return res.status(404).json({ msg: 'Babysitter profile is not available' });
+        const accepted = await Booking.exists({ babysitterId: user._id, status: 'accepted' });
+        if (accepted) return res.status(404).json({ msg: 'Babysitter profile is not available' });
+        const result = user.toObject(); result.photoUrl = user.photoFile ? `/api/babysitter/photo/${user._id}` : null; delete result.photoFile; res.json(result);
+    } catch (err) {
+        res.status(500).send('Server error');
+    }
+});
+
+// Register a new babysitter
+router.post('/register', async (req, res) => {
+    const { username, password, name, phone, age, nationality, services } = req.body;
+    if (typeof username !== 'string' || !username.trim() || typeof password !== 'string' || password.length < 8 || typeof name !== 'string' || !name.trim()) {
+        return res.status(400).json({ msg: 'Name, username, and a password of at least 8 characters are required' });
+    }
+
+    try {
+        // Check if the user already exists
+        let user = await User.findOne({ username: username.trim() });
+        if (user) {
+            return res.status(400).json({ msg: 'User already exists' });
+        }
+
+        // Create a new user with the role of 'babysitter'
+        user = new User({
+            username: username.trim(),
+            password,
+            name: name.trim(),
+            role: 'babysitter'
+        });
+
+        // Hash the password
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(password, salt);
+
+        // Save the user
+        await user.save();
+
+        // Create a new babysitter profile
+        const babysitter = new Babysitter({
+            userId: user.id,
+            name,
+            phone,
+            age,
+            nationality,
+            services
+        });
+
+        // Save the babysitter profile
+        await babysitter.save();
+
+        // Generate a JWT token
+        const payload = {
+            user: {
+                id: user.id,
+                role: user.role
+            }
+        };
+
+        jwt.sign(
+            payload,
+            process.env.JWT_SECRET,
+            { expiresIn: '1h' },
+            (err, token) => {
+                if (err) throw err;
+                res.json({ token });
+            }
+        );
+    } catch (err) {
+        console.error(err.message);
+        res.status(500).send('Server error');
+    }
+});
+
+
+
+// Accept work request
+router.put('/accept/:id', auth, async (req, res) => {
+    try {
+        const babysitter = await Babysitter.findById(req.params.id);
+        if (!babysitter) return res.status(404).json({ msg: 'Babysitter not found' });
+
+        if (babysitter.userId.toString() !== req.user.id) {
+            return res.status(401).json({ msg: 'User not authorized' });
+        }
+
+        babysitter.available = false;
+        await babysitter.save();
+        res.json(babysitter);
+    } catch (err) {
+        res.status(500).send('Server error');
+    }
+});
+
+module.exports = router;
