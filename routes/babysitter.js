@@ -157,7 +157,7 @@ router.get('/photo/:id', async (req, res) => {
     try {
         const sitter = await Babysitter.findOne({ _id: req.params.id, moderationStatus: 'approved', available: true, hasAcceptedBooking: { $ne: true } }).select('+photoFile');
         if (!sitter || !sitter.photoFile || await Booking.exists({ babysitterId: sitter._id, status: 'accepted' })) return res.sendStatus(404);
-        res.sendFile(path.join(privateDir, sitter.photoFile));
+        res.sendFile(path.join(privateDir, path.basename(sitter.photoFile)), (err) => { if (err && !res.headersSent) res.sendStatus(404); });
     } catch (_) { res.sendStatus(404); }
 });
 

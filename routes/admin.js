@@ -150,8 +150,10 @@ router.get('/babysitters/:id/documents/:kind', auth, adminAuth, async (req, res)
         const sitter = await Babysitter.findById(req.params.id).select(`+${field}`);
         const filename = sitter?.[field];
         if (!filename) return res.sendStatus(404);
+        const filePath = path.join(privateDir, path.basename(filename));
         res.setHeader('Cache-Control', 'private, no-store');
-        res.sendFile(path.join(privateDir, filename));
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.sendFile(filePath, (err) => { if (err && !res.headersSent) res.sendStatus(404); });
     } catch (_) { res.sendStatus(404); }
 });
 
