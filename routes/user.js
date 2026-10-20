@@ -7,6 +7,8 @@ const Booking = require('../models/Booking');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
+const { OAuth2Client } = require('google-auth-library');
 const privateDir = path.join(__dirname, '..', 'private_uploads');
 
 const router = express.Router();
@@ -120,6 +122,100 @@ router.get('/users/:id', auth, async (req, res) => {
 });
 
 
+// Issue a short-lived, signed nonce so Google credentials can be tied to this sign-in attempt.
+router.post('/oauth/nonce', (req, res) => {
+    const { provider } = req.body || {};
+    if (provider !== 'google') return res.status(400).json({ msg: 'Unsupported social sign-in provider' });
+    if (!process.env.GOOGLE_CLIENT_ID) return res.status(503).json({ msg: 'Social sign-in provider is not configured' });
+
+    const nonce = jwt.sign({
+        purpose: 'google-oauth-nonce',
+        provider,
+        nonceId: crypto.randomBytes(24).toString('hex'),
+    }, process.env.JWT_SECRET, { expiresIn: '5m' });
+    return res.json({ nonce });
+});
+
+// Verify a Google ID token and create or sign in to a user account.
+router.post('/oauth', async (req, res) => {
+    const { provider, credential, role = 'user', nonce } = req.body || {};
+    const clientId = process.env.GOOGLE_CLIENT_ID;
+    if (provider !== 'google') return res.status(400).json({ msg: 'Unsupported social sign-in provider' });
+    if (!clientId) return res.status(503).json({ msg: 'Social sign-in provider is not configured' });
+    if (typeof credential !== 'string' || typeof nonce !== 'string') {
+        return res.status(400).json({ msg: 'A Google credential and sign-in nonce are required' });
+    }
+    if (!['user', 'babysitter'].includes(role)) return res.status(400).json({ msg: 'Choose a valid account type' });
+
+    try {
+        const nonceClaims = jwt.verify(nonce, process.env.JWT_SECRET);
+        if (nonceClaims.purpose !== 'google-oauth-nonce' || nonceClaims.provider !== 'google') {
+            return res.status(401).json({ msg: 'Google sign-in nonce is invalid or expired' });
+        }
+
+        const googleClient = new OAuth2Client(clientId);
+        const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: clientId });
+        const claims = ticket.getPayload();
+        if (!claims || claims.nonce !== nonce || claims.email_verified !== true || !claims.email || !claims.sub) {
+            return res.status(401).json({ msg: 'Google account verification failed' });
+        }
+
+        const email = claims.email.trim().toLowerCase();
+        let user = await User.findOne({ googleId: claims.sub });
+
+        if (!user) {
+            const matchingUsers = await User.find({ email }).limit(2);
+            if (matchingUsers.length > 1) {
+                return res.status(409).json({ msg: 'Email is already registered to another account' });
+            }
+            user = matchingUsers[0] || null;
+            if (user?.role === 'admin') {
+                return res.status(409).json({ msg: 'Email is already registered to another account' });
+            }
+            if (user?.googleId && user.googleId !== claims.sub) {
+                return res.status(409).json({ msg: 'Email is already registered to another account' });
+            }
+
+            if (user) {
+                user.googleId = claims.sub;
+                user.email = email;
+                if (!user.name && claims.name) user.name = claims.name;
+                await user.save();
+            } else {
+                const localPart = (email.split('@')[0] || 'google-user').replace(/[^a-zA-Z0-9._-]/g, '').slice(0, 40) || 'google-user';
+                let username = localPart;
+                while (await User.exists({ username })) {
+                    username = `${localPart}-${crypto.randomBytes(3).toString('hex')}`;
+                }
+
+                user = new User({
+                    username,
+                    name: typeof claims.name === 'string' ? claims.name.trim() : '',
+                    email,
+                    googleId: claims.sub,
+                    role,
+                });
+                await user.save();
+
+                if (role === 'babysitter') {
+                    await new Babysitter({ userId: user.id, name: user.name }).save();
+                }
+            }
+        }
+
+        const payload = { user: { id: user.id, role: user.role, isSuperUser: user.isSuperUser } };
+        const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
+        return res.json({ token, user: payload.user });
+    } catch (err) {
+        if (err.name === 'TokenExpiredError' || err.name === 'JsonWebTokenError') {
+            return res.status(401).json({ msg: 'Google sign-in nonce is invalid or expired' });
+        }
+        console.error('Google sign-in failed:', err.message);
+        return res.status(401).json({ msg: 'Google sign-in could not be verified' });
+    }
+});
+
+
 // Registration route
 router.post('/register', async (req, res) => {
     const { username, password, name } = req.body;
@@ -179,7 +275,7 @@ router.post('/login', async (req, res) => {
     const { username, password } = req.body;
     try {
         const user = await User.findOne({ username });
-        if (!user) return res.status(400).json({ msg: 'Invalid credentials' });
+        if (!user?.password) return res.status(400).json({ msg: 'Invalid credentials' });
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ msg: 'Invalid credentials' });

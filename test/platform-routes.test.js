@@ -6,6 +6,7 @@ const proxyquire = require('proxyquire').noCallThru();
 const request = require('supertest');
 
 process.env.JWT_SECRET = 'route-test-secret';
+process.env.GOOGLE_CLIENT_ID = 'test-google-client-id';
 const parentId = '64a000000000000000000010';
 const caregiverUserId = '64a000000000000000000011';
 const caregiverProfileId = '64a000000000000000000012';
@@ -99,6 +100,28 @@ test('login rejects an incorrect password and returns a signed user session for 
   assert.equal(typeof accepted.body.token, 'string');
 });
 
+
+
+test('Google sign-in nonce endpoint issues a short-lived signed nonce', async () => {
+  const response = await request(userApp)
+    .post('/api/user/oauth/nonce')
+    .send({ provider: 'google' });
+
+  assert.equal(response.status, 200);
+  assert.equal(typeof response.body.nonce, 'string');
+  const claims = jwt.verify(response.body.nonce, process.env.JWT_SECRET);
+  assert.equal(claims.purpose, 'google-oauth-nonce');
+  assert.equal(claims.provider, 'google');
+});
+
+test('Google OAuth rejects credentials without a valid nonce before token verification', async () => {
+  const response = await request(userApp)
+    .post('/api/user/oauth')
+    .send({ provider: 'google', credential: 'invalid-token', nonce: 'invalid-nonce' });
+
+  assert.equal(response.status, 401);
+  assert.equal(response.body.msg, 'Google sign-in nonce is invalid or expired');
+});
 
 test('family registration enforces a minimum password length', async () => {
   const response = await request(userApp)
