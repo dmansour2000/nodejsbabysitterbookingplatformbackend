@@ -12,6 +12,7 @@ app.use('/api/user', require('./routes/user'));
 app.use('/api/babysitter', require('./routes/babysitter'));
 app.use('/api/bookings', require('./routes/bookings'));
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/blacklist', require('./routes/blacklist'));
 
 const PORT = process.env.PORT || 5170;
 

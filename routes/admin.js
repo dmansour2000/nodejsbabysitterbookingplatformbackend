@@ -64,8 +64,8 @@ router.get('/users', auth, async (req, res) => {
             // Super user can see all users including admins but excluding themselves
             users = await User.find({ _id: { $ne: currentUser.id } }).select('-password');
         } else {
-            // Regular admin can see all users except other admins
-            users = await User.find({ role: { $ne: 'admin' } }).select('-password');
+            // Regular admin can only see caregiver accounts, not regular users or other admins
+            users = await User.find({ role: 'babysitter' }).select('-password');
         }
 
         res.json(users);
@@ -83,6 +83,7 @@ router.get('/users/:id/details', auth, adminAuth, async (req, res) => {
         const user = await User.findById(req.params.id).select('-password').lean();
         if (!user) return res.status(404).json({ msg: 'User not found' });
         if (user.role === 'admin' && !req.currentUser.isSuperUser) return res.status(403).json({ msg: 'Only a super user can view admin accounts' });
+        if (user.role === 'user' && !req.currentUser.isSuperUser) return res.status(403).json({ msg: 'Regular admins cannot view user accounts' });
         if (user.role === 'user') {
             const bookings = await Booking.find({ parentId: user._id }).populate({ path: 'babysitterId', select: 'name' }).sort({ createdAt: -1 }).lean();
             return res.json({ user, requests: bookings.map((booking) => ({ ...booking, babysitterName: booking.babysitterId?.name || null })) });
@@ -116,6 +117,9 @@ router.delete('/users/:id', auth, adminAuth, async (req, res) => {
         }
         if (user.role === 'admin' && !req.currentUser.isSuperUser) {
             return res.status(403).json({ msg: 'Only a super user can remove an admin' });
+        }
+        if (user.role === 'user' && !req.currentUser.isSuperUser) {
+            return res.status(403).json({ msg: 'Regular admins cannot delete user accounts' });
         }
         await User.findByIdAndDelete(user._id);
         const profile = await Babysitter.findOneAndDelete({ userId: user._id });
@@ -173,6 +177,9 @@ router.delete('/babysitters/:id', auth, adminAuth, async (req, res) => {
     try {
         if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
             return res.status(400).json({ msg: 'Invalid ID format' });
+        }
+        if (!req.currentUser.isSuperUser) {
+            return res.status(403).json({ msg: 'Only a super user can remove a caregiver profile. Use blacklist to suspend a caregiver.' });
         }
         const babysitter = await Babysitter.findById(req.params.id).select('+photoFile +nationalIdFile +passportFile +residencyFile');
         if (!babysitter) return res.status(404).json({ msg: 'Babysitter not found' });
