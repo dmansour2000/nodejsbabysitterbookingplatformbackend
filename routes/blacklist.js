@@ -6,10 +6,9 @@ const fs = require('fs');
 const path = require('path');
 const User = require('../models/User');
 const BlacklistedCaregiver = require('../models/BlacklistedCaregiver');
+const { saveFileToDatabase, serveFile, deleteStoredFile, privateDir } = require('../utils/fileStorage');
 
 const router = express.Router();
-const privateDir = path.join(__dirname, '..', 'private_uploads');
-fs.mkdirSync(privateDir, { recursive: true, mode: 0o700 });
 const allowedTypes = new Set(['image/jpeg', 'image/png', 'image/webp', 'application/pdf']);
 const upload = multer({
     storage: multer.diskStorage({
@@ -118,14 +117,21 @@ router.post('/', auth, regularUser, handleUpload, async (req, res) => {
         return res.status(400).json({ msg: 'Enter a name, nationality, a reason of 10 to 2000 characters, and a valid optional age' });
     }
     try {
+        const photoFile = req.files.photo[0];
+        const docFiles = req.files.documents || [];
+        await saveFileToDatabase(photoFile.filename, photoFile.path, photoFile.mimetype);
+        for (const doc of docFiles) {
+            await saveFileToDatabase(doc.filename, doc.path, doc.mimetype);
+        }
+
         const entry = await BlacklistedCaregiver.create({
             submittedBy: req.user.id,
             name: normalizedName,
             nationality: normalizedNationality,
             ...(numericAge !== undefined ? { age: numericAge } : {}),
             reason: normalizedReason,
-            photoFile: req.files.photo[0].filename,
-            verificationDocuments: (req.files.documents || []).map((file) => file.filename),
+            photoFile: photoFile.filename,
+            verificationDocuments: docFiles.map((file) => file.filename),
             status: 'pending',
         });
         return res.status(201).json({ id: entry._id, status: entry.status, msg: 'Report sent for admin review' });
@@ -154,12 +160,11 @@ router.delete('/admin/:id', auth, admin, async (req, res) => {
     try {
         const entry = await BlacklistedCaregiver.findById(req.params.id).select('+photoFile +verificationDocuments');
         if (!entry) return res.status(404).json({ msg: 'Report not found' });
-        const filesToRemove = [
-            ...(entry.photoFile ? [{ filename: entry.photoFile }] : []),
-            ...(entry.verificationDocuments || []).map((f) => ({ filename: f })),
-        ];
         await BlacklistedCaregiver.deleteOne({ _id: entry._id });
-        removeFiles(filesToRemove);
+        if (entry.photoFile) await deleteStoredFile(entry.photoFile);
+        for (const doc of (entry.verificationDocuments || [])) {
+            await deleteStoredFile(doc);
+        }
         return res.json({ msg: 'Report deleted' });
     } catch (_) { return res.status(500).json({ msg: 'Could not delete report' }); }
 });
@@ -183,9 +188,7 @@ router.get('/admin/:id/photo', auth, admin, async (req, res) => {
     try {
         const entry = await BlacklistedCaregiver.findById(req.params.id).select('+photoFile');
         if (!entry?.photoFile) return res.sendStatus(404);
-        res.setHeader('Cache-Control', 'private, no-store');
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        return res.sendFile(path.join(privateDir, path.basename(entry.photoFile)));
+        return serveFile(entry.photoFile, res);
     } catch (_) { return res.sendStatus(404); }
 });
 
@@ -196,9 +199,7 @@ router.get('/admin/:id/documents/:index', auth, admin, async (req, res) => {
         const entry = await BlacklistedCaregiver.findById(req.params.id).select('+verificationDocuments');
         const file = entry?.verificationDocuments?.[index];
         if (!file) return res.sendStatus(404);
-        res.setHeader('Cache-Control', 'private, no-store');
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        return res.sendFile(path.join(privateDir, path.basename(file)));
+        return serveFile(file, res);
     } catch (_) { return res.sendStatus(404); }
 });
 
@@ -206,9 +207,7 @@ router.get('/:id/photo', async (req, res) => {
     try {
         const entry = await BlacklistedCaregiver.findOne({ _id: req.params.id, status: 'approved' }).select('+photoFile');
         if (!entry?.photoFile) return res.sendStatus(404);
-        res.setHeader('Cache-Control', 'public, max-age=3600');
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        return res.sendFile(path.join(privateDir, path.basename(entry.photoFile)));
+        return serveFile(entry.photoFile, res, { cacheControl: 'public, max-age=3600' });
     } catch (_) { return res.sendStatus(404); }
 });
 

@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
-const privateDir = path.join(__dirname, '..', 'private_uploads');
+const { serveFile, deleteStoredFile, privateDir } = require('../utils/fileStorage');
 
 const router = express.Router();
 
@@ -153,26 +153,7 @@ const handleGetSitterDocument = async (req, res) => {
         }
         const filename = sitter?.[field];
         if (!filename) return res.status(404).json({ msg: 'No document on file' });
-        const filePath = path.join(privateDir, path.basename(filename));
-        if (!fs.existsSync(filePath)) {
-            return res.status(404).json({ msg: 'Document file not found on disk' });
-        }
-        res.setHeader('Cache-Control', 'private, no-store');
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-
-        const ext = path.extname(filePath).toLowerCase();
-        const mimeTypes = {
-            '.jpg': 'image/jpeg',
-            '.jpeg': 'image/jpeg',
-            '.png': 'image/png',
-            '.webp': 'image/webp',
-            '.pdf': 'application/pdf',
-        };
-        if (mimeTypes[ext]) {
-            res.setHeader('Content-Type', mimeTypes[ext]);
-        }
-
-        res.sendFile(filePath, (err) => { if (err && !res.headersSent) res.status(404).json({ msg: 'Error sending file' }); });
+        return serveFile(filename, res);
     } catch (_) { res.sendStatus(404); }
 };
 
@@ -210,7 +191,9 @@ router.delete('/babysitters/:id', auth, adminAuth, async (req, res) => {
         }
         const babysitter = await Babysitter.findById(req.params.id).select('+photoFile +nationalIdFile +passportFile +residencyFile');
         if (!babysitter) return res.status(404).json({ msg: 'Babysitter not found' });
-        for (const filename of [babysitter.photoFile, babysitter.nationalIdFile, babysitter.passportFile, babysitter.residencyFile]) if (filename) fs.unlink(path.join(privateDir, filename), () => {});
+        for (const filename of [babysitter.photoFile, babysitter.nationalIdFile, babysitter.passportFile, babysitter.residencyFile]) {
+            if (filename) await deleteStoredFile(filename);
+        }
         await Babysitter.findByIdAndDelete(babysitter._id);
         await User.findByIdAndDelete(babysitter.userId);
         await Booking.deleteMany({ babysitterId: babysitter._id });

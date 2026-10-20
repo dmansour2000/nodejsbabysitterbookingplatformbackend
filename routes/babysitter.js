@@ -9,9 +9,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const Booking = require('../models/Booking');
+const { saveFileToDatabase, serveFile, deleteStoredFile, privateDir } = require('../utils/fileStorage');
 
-const privateDir = path.join(__dirname, '..', 'private_uploads');
-fs.mkdirSync(privateDir, { recursive: true, mode: 0o700 });
 const upload = multer({
     storage: multer.diskStorage({ destination: privateDir, filename: (_req, file, cb) => { const ext = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'application/pdf': '.pdf' }[file.mimetype] || ''; cb(null, `${crypto.randomBytes(24).toString('hex')}${ext}`); } }),
     limits: { fileSize: 5 * 1024 * 1024, files: 4 },
@@ -65,9 +64,7 @@ router.get('/profile/photo', auth, async (req, res) => {
     try {
         const sitter = await Babysitter.findOne({ userId: req.user.id }).select('+photoFile');
         if (!sitter?.photoFile) return res.sendStatus(404);
-        res.setHeader('Cache-Control', 'private, no-store');
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        res.sendFile(path.join(privateDir, path.basename(sitter.photoFile)));
+        return serveFile(sitter.photoFile, res);
     } catch (_) { res.sendStatus(404); }
 });
 
@@ -79,9 +76,7 @@ router.get('/profile/documents/:kind', auth, async (req, res) => {
     try {
         const sitter = await Babysitter.findOne({ userId: req.user.id }).select('+' + field);
         if (!sitter?.[field]) return res.sendStatus(404);
-        res.setHeader('Cache-Control', 'private, no-store');
-        res.setHeader('X-Content-Type-Options', 'nosniff');
-        res.sendFile(path.join(privateDir, path.basename(sitter[field])));
+        return serveFile(sitter[field], res);
     } catch (_) { res.sendStatus(404); }
 });
 // Update babysitter profile
@@ -157,7 +152,7 @@ router.get('/photo/:id', async (req, res) => {
     try {
         const sitter = await Babysitter.findOne({ _id: req.params.id, moderationStatus: 'approved', available: true, hasAcceptedBooking: { $ne: true } }).select('+photoFile');
         if (!sitter || !sitter.photoFile || await Booking.exists({ babysitterId: sitter._id, status: 'accepted' })) return res.sendStatus(404);
-        res.sendFile(path.join(privateDir, path.basename(sitter.photoFile)), (err) => { if (err && !res.headersSent) res.sendStatus(404); });
+        return serveFile(sitter.photoFile, res, { cacheControl: 'public, max-age=3600' });
     } catch (_) { res.sendStatus(404); }
 });
 
@@ -170,8 +165,17 @@ router.post('/profile/documents', auth, (req, res, next) => {
     try {
         const sitter = await Babysitter.findOne({ userId: req.user.id }).select('+photoFile +nationalIdFile +passportFile +residencyFile');
         if (!sitter) { Object.values(files).flat().forEach((f) => fs.unlink(f.path, () => {})); return res.status(404).json({ msg: 'Babysitter profile not found' }); }
-        const replace = (key, field) => { if (!files[key]?.[0]) return; if (sitter[field]) fs.unlink(path.join(privateDir, sitter[field]), () => {}); sitter[field] = files[key][0].filename; };
-        replace('photo', 'photoFile'); replace('nationalId', 'nationalIdFile'); replace('passport', 'passportFile'); replace('residency', 'residencyFile');
+        const replace = async (key, field) => {
+            if (!files[key]?.[0]) return;
+            const file = files[key][0];
+            if (sitter[field]) await deleteStoredFile(sitter[field]);
+            sitter[field] = file.filename;
+            await saveFileToDatabase(file.filename, file.path, file.mimetype);
+        };
+        await replace('photo', 'photoFile');
+        await replace('nationalId', 'nationalIdFile');
+        await replace('passport', 'passportFile');
+        await replace('residency', 'residencyFile');
         if (files.photo?.length && !files.photo[0].mimetype.startsWith('image/')) return res.status(400).json({ msg: 'Profile photo must be an image' });
         sitter.moderationStatus = 'pending'; await sitter.save();
         res.json({ msg: 'Documents uploaded for review', moderationStatus: sitter.moderationStatus });

@@ -26,6 +26,8 @@ async function startServer() {
 
     await mongoose.connect(process.env.MONGO_URI);
     console.log('MongoDB connected');
+    const { syncLocalFilesToDb } = require('./utils/fileStorage');
+    syncLocalFilesToDb().catch((err) => console.error('Initial file sync error:', err.message));
     app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 }
 
