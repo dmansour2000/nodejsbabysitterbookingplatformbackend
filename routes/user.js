@@ -154,10 +154,22 @@ router.post('/oauth', async (req, res) => {
         }
 
         const googleClient = new OAuth2Client(clientId);
-        const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: clientId });
+        let ticket;
+        try {
+            ticket = await googleClient.verifyIdToken({ idToken: credential, audience: clientId });
+        } catch (verificationError) {
+            console.error('Google ID token verification failed:', verificationError.message);
+            return res.status(401).json({ msg: 'Google credential could not be verified. Check the configured Google client ID.' });
+        }
         const claims = ticket.getPayload();
-        if (!claims || claims.nonce !== nonce || claims.email_verified !== true || !claims.email || !claims.sub) {
-            return res.status(401).json({ msg: 'Google account verification failed' });
+        if (!claims || !claims.sub || !claims.email) {
+            return res.status(401).json({ msg: 'Google credential is missing required account details' });
+        }
+        if (claims.nonce !== nonce) {
+            return res.status(401).json({ msg: 'Google credential nonce does not match this sign-in attempt' });
+        }
+        if (claims.email_verified !== true) {
+            return res.status(401).json({ msg: 'Google account email is not verified' });
         }
 
         const email = claims.email.trim().toLowerCase();
@@ -210,30 +222,42 @@ router.post('/oauth', async (req, res) => {
         if (err.name === 'TokenExpiredError' || err.name === 'JsonWebTokenError') {
             return res.status(401).json({ msg: 'Google sign-in nonce is invalid or expired' });
         }
-        console.error('Google sign-in failed:', err.message);
-        return res.status(401).json({ msg: 'Google sign-in could not be verified' });
+        if (err.code === 11000) {
+            return res.status(409).json({ msg: 'Email is already registered to another account' });
+        }
+        console.error('Google sign-in account handling failed:', err.message);
+        return res.status(500).json({ msg: 'Could not complete Google sign-in. Please try again.' });
     }
 });
 
 
 // Registration route
 router.post('/register', async (req, res) => {
-    const { username, password, name } = req.body;
+    const { username, email, password, name } = req.body;
 
     if (typeof username !== 'string' || !username.trim() || typeof password !== 'string' || password.length < 8) {
         return res.status(400).json({ msg: 'Username and a password of at least 8 characters are required' });
     }
 
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        return res.status(400).json({ msg: 'A valid email address is required' });
+    }
+
     try {
         // Check if the user already exists
-        let user = await User.findOne({ username });
+        let user = await User.findOne({ username: username.trim() });
         if (user) {
             return res.status(400).json({ msg: 'User already exists' });
+        }
+        if (await User.findOne({ email: normalizedEmail })) {
+            return res.status(409).json({ msg: 'Email is already registered to another account' });
         }
 
         // Create a new user
         user = new User({
             username: username.trim(),
+            email: normalizedEmail,
             password,
             name: typeof name === 'string' ? name.trim() : '',
             role: 'user'

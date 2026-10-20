@@ -220,9 +220,14 @@ router.get('/users/:id', auth, async (req, res) => {
 
 // Register a new babysitter
 router.post('/register', async (req, res) => {
-    const { username, password, name, phone, age, nationality, services } = req.body;
+    const { username, email, password, name, phone, age, nationality, services } = req.body;
     if (typeof username !== 'string' || !username.trim() || typeof password !== 'string' || password.length < 8 || typeof name !== 'string' || !name.trim()) {
         return res.status(400).json({ msg: 'Name, username, and a password of at least 8 characters are required' });
+    }
+
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        return res.status(400).json({ msg: 'A valid email address is required' });
     }
 
     try {
@@ -231,10 +236,14 @@ router.post('/register', async (req, res) => {
         if (user) {
             return res.status(400).json({ msg: 'User already exists' });
         }
+        if (await User.findOne({ email: normalizedEmail })) {
+            return res.status(409).json({ msg: 'Email is already registered to another account' });
+        }
 
         // Create a new user with the role of 'babysitter'
         user = new User({
             username: username.trim(),
+            email: normalizedEmail,
             password,
             name: name.trim(),
             role: 'babysitter'
