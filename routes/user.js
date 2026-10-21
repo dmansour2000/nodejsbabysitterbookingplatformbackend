@@ -484,9 +484,10 @@ router.post('/forgot-password', async (req, res) => {
             return res.json({ msg: 'If an account exists for that email, a password reset link has been sent.' });
         }
 
-        const apiKey = process.env.RESEND_API_KEY;
-        if (!apiKey) {
-            console.error('[Forgot Password] RESEND_API_KEY is not configured');
+        const hasGmail = !!(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD);
+        const hasResend = !!process.env.RESEND_API_KEY;
+        if (!hasGmail && !hasResend) {
+            console.error('[Forgot Password] Neither Gmail credentials nor RESEND_API_KEY are configured');
             return res.status(503).json({ msg: 'Password recovery email is not configured' });
         }
 
