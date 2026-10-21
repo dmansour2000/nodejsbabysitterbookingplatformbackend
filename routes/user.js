@@ -382,6 +382,142 @@ router.post('/login', async (req, res) => {
     }
 });
 
+// Update user password
+router.patch('/password', auth, async (req, res) => {
+    const { currentPassword, newPassword } = req.body || {};
+
+    if (typeof newPassword !== 'string' || newPassword.length < 8) {
+        return res.status(400).json({ msg: 'New password must be at least 8 characters' });
+    }
+
+    try {
+        const user = await User.findById(req.user.id);
+        if (!user) {
+            return res.status(404).json({ msg: 'User not found' });
+        }
+
+        // If user already has a password set, verify currentPassword
+        if (user.password) {
+            if (typeof currentPassword !== 'string' || !currentPassword) {
+                return res.status(400).json({ msg: 'Current password is incorrect' });
+            }
+            const isMatch = await bcrypt.compare(currentPassword, user.password);
+            if (!isMatch) {
+                return res.status(400).json({ msg: 'Current password is incorrect' });
+            }
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(newPassword, salt);
+        await user.save();
+
+        res.json({ msg: 'Password updated successfully' });
+    } catch (err) {
+        console.error('Password update error:', err);
+        res.status(500).json({ msg: 'Server error' });
+    }
+});
+
+// Update user email
+router.patch('/email', auth, async (req, res) => {
+    const { email, currentPassword } = req.body || {};
+
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        return res.status(400).json({ msg: 'A valid email address is required' });
+    }
+
+    try {
+        const user = await User.findById(req.user.id);
+        if (!user) {
+            return res.status(404).json({ msg: 'User not found' });
+        }
+
+        // Verify current password if user has one
+        if (user.password) {
+            if (typeof currentPassword !== 'string' || !currentPassword) {
+                return res.status(400).json({ msg: 'Current password is incorrect' });
+            }
+            const isMatch = await bcrypt.compare(currentPassword, user.password);
+            if (!isMatch) {
+                return res.status(400).json({ msg: 'Current password is incorrect' });
+            }
+        }
+
+        // Check if email is already registered to another account
+        const existing = await User.findOne({ email: normalizedEmail, _id: { $ne: user._id } });
+        if (existing) {
+            return res.status(409).json({ msg: 'Email address is already in use' });
+        }
+
+        user.email = normalizedEmail;
+        await user.save();
+
+        res.json({ msg: 'Email updated successfully', email: user.email });
+    } catch (err) {
+        if (err.code === 11000) {
+            return res.status(409).json({ msg: 'Email address is already in use' });
+        }
+        console.error('Email update error:', err);
+        res.status(500).json({ msg: 'Server error' });
+    }
+});
+
+// Request password recovery
+router.post('/forgot-password', async (req, res) => {
+    const { email } = req.body || {};
+    const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+        return res.status(400).json({ msg: 'A valid email address is required' });
+    }
+
+    try {
+        const user = await User.findOne({ email: normalizedEmail });
+        if (!user) {
+            return res.json({ msg: 'If an account exists for that email, a password reset link has been sent.' });
+        }
+
+        if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+            return res.status(503).json({ msg: 'Password recovery email is not configured' });
+        }
+
+        res.json({ msg: 'If an account exists for that email, a password reset link has been sent.' });
+    } catch (err) {
+        res.status(500).json({ msg: 'Server error' });
+    }
+});
+
+// Reset password with token
+router.post('/reset-password', async (req, res) => {
+    const { token, newPassword } = req.body || {};
+    if (typeof token !== 'string' || !token) {
+        return res.status(400).json({ msg: 'Reset token is required' });
+    }
+    if (typeof newPassword !== 'string' || newPassword.length < 8) {
+        return res.status(400).json({ msg: 'New password must be at least 8 characters' });
+    }
+
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (decoded.purpose !== 'password-reset' || !decoded.id) {
+            return res.status(400).json({ msg: 'Invalid or expired token' });
+        }
+
+        const user = await User.findById(decoded.id);
+        if (!user) {
+            return res.status(404).json({ msg: 'User not found' });
+        }
+
+        const salt = await bcrypt.genSalt(10);
+        user.password = await bcrypt.hash(newPassword, salt);
+        await user.save();
+
+        res.json({ msg: 'Password reset successful' });
+    } catch (err) {
+        return res.status(400).json({ msg: 'Invalid or expired token' });
+    }
+});
+
 // Get user data
 router.get('/', auth, async (req, res) => {
     try {

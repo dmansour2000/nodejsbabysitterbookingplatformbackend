@@ -23,7 +23,10 @@ const acceptedCaregiverIds = [caregiverProfileId];
 const userModel = {
   findOne: async (filter = {}) => filter.username ? loginUser : null,
   find: () => ({ limit: async () => [] }),
-  findById: () => ({ select: async () => ({ _id: parentId, id: parentId, role: 'user', username: 'family', name: 'Family' }) }),
+  findById: (id) => {
+    const user = { _id: id || parentId, id: id || parentId, role: 'user', username: 'family', name: 'Family', password: 'hashed-password', email: 'family@example.com', save: async () => {} };
+    return Object.assign(Promise.resolve(user), { select: async () => user });
+  },
 };
 const userRouter = proxyquire('../routes/user', {
   '../models/User': userModel,
@@ -287,4 +290,40 @@ test('public caregiver search excludes unavailable and accepted caregivers and o
   assert.equal(response.body[0].photoUrl, '/api/babysitter/photo/64a000000000000000000013');
   assert.equal(requestedFilter.moderationStatus, 'approved');
   assert.deepEqual(requestedFilter._id.$nin, acceptedCaregiverIds);
+});
+
+test('PATCH /api/user/password rejects incorrect current password and updates with valid credentials', async () => {
+  comparePassword = false;
+  const rejected = await request(userApp)
+    .patch('/api/user/password')
+    .set('Authorization', 'Bearer ' + familyToken)
+    .send({ currentPassword: 'wrong-password', newPassword: 'new-secure-password' });
+  assert.equal(rejected.status, 400);
+  assert.equal(rejected.body.msg, 'Current password is incorrect');
+
+  comparePassword = true;
+  const accepted = await request(userApp)
+    .patch('/api/user/password')
+    .set('Authorization', 'Bearer ' + familyToken)
+    .send({ currentPassword: 'correct-password', newPassword: 'new-secure-password' });
+  assert.equal(accepted.status, 200);
+  assert.equal(accepted.body.msg, 'Password updated successfully');
+});
+
+test('PATCH /api/user/email updates the user email address when current password matches', async () => {
+  comparePassword = false;
+  const rejected = await request(userApp)
+    .patch('/api/user/email')
+    .set('Authorization', 'Bearer ' + familyToken)
+    .send({ email: 'new-email@example.com', currentPassword: 'wrong-password' });
+  assert.equal(rejected.status, 400);
+  assert.equal(rejected.body.msg, 'Current password is incorrect');
+
+  comparePassword = true;
+  const accepted = await request(userApp)
+    .patch('/api/user/email')
+    .set('Authorization', 'Bearer ' + familyToken)
+    .send({ email: 'new-email@example.com', currentPassword: 'correct-password' });
+  assert.equal(accepted.status, 200);
+  assert.equal(accepted.body.email, 'new-email@example.com');
 });
