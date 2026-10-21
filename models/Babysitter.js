@@ -19,6 +19,7 @@ const BabysitterSchema = new mongoose.Schema({
     nationalIdFile: { type: String, select: false },
     passportFile: { type: String, select: false },
     residencyFile: { type: String, select: false },
+    verificationDocumentFiles: { type: [String], select: false, default: [] },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Babysitter', BabysitterSchema);

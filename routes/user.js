@@ -210,7 +210,27 @@ router.post('/oauth', async (req, res) => {
             }
         }
 
-        const payload = { user: { id: user.id, role: user.role, isSuperUser: user.isSuperUser } };
+        let sitterName = null;
+        let sitterPhotoUrl = null;
+        if (user.role === 'babysitter') {
+            const sitter = await Babysitter.findOne({ userId: user._id }).select('+photoFile');
+            if (sitter) {
+                sitterName = sitter.name;
+                sitterPhotoUrl = sitter.photoFile ? `/api/babysitter/photo/${sitter._id}` : null;
+            }
+        }
+
+        const payload = {
+            user: {
+                id: user.id,
+                username: user.username,
+                email: user.email,
+                role: user.role,
+                isSuperUser: user.isSuperUser,
+                name: sitterName || user.name || user.username,
+                photoUrl: sitterPhotoUrl || null
+            }
+        };
         const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
         return res.json({ token, user: payload.user });
     } catch (err) {
@@ -272,7 +292,27 @@ router.post('/oauth/complete-registration', async (req, res) => {
             }
         }
 
-        const payload = { user: { id: user.id, role: user.role, isSuperUser: user.isSuperUser } };
+        let sitterName = null;
+        let sitterPhotoUrl = null;
+        if (user.role === 'babysitter') {
+            const sitter = await Babysitter.findOne({ userId: user._id }).select('+photoFile');
+            if (sitter) {
+                sitterName = sitter.name;
+                sitterPhotoUrl = sitter.photoFile ? `/api/babysitter/photo/${sitter._id}` : null;
+            }
+        }
+
+        const payload = {
+            user: {
+                id: user.id,
+                username: user.username,
+                email: user.email,
+                role: user.role,
+                isSuperUser: user.isSuperUser,
+                name: sitterName || user.name || user.username,
+                photoUrl: sitterPhotoUrl || null
+            }
+        };
         const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
         return res.json({ token, user: payload.user });
     } catch (err) {
@@ -361,11 +401,25 @@ router.post('/login', async (req, res) => {
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ msg: 'Invalid credentials' });
 
+        let sitterName = null;
+        let sitterPhotoUrl = null;
+        if (user.role === 'babysitter') {
+            const sitter = await Babysitter.findOne({ userId: user._id }).select('+photoFile');
+            if (sitter) {
+                sitterName = sitter.name;
+                sitterPhotoUrl = sitter.photoFile ? `/api/babysitter/photo/${sitter._id}` : null;
+            }
+        }
+
         const payload = {
             user: {
                 id: user.id,
+                username: user.username,
+                email: user.email,
                 role: user.role, // Ensure role is included
-                isSuperUser: user.isSuperUser
+                isSuperUser: user.isSuperUser,
+                name: sitterName || user.name || user.username,
+                photoUrl: sitterPhotoUrl || null
             }
         };
 
@@ -464,6 +518,27 @@ router.patch('/email', auth, async (req, res) => {
     }
 });
 
+// Update user profile name
+router.patch('/profile', auth, async (req, res) => {
+    const { name } = req.body || {};
+    try {
+        const user = await User.findById(req.user.id);
+        if (!user) return res.status(404).json({ msg: 'User not found' });
+        if (typeof name === 'string' && name.trim()) {
+            user.name = name.trim();
+            await user.save();
+            if (user.role === 'babysitter') {
+                await Babysitter.updateOne({ userId: user._id }, { $set: { name: name.trim() } });
+            }
+        }
+        const userObj = user.toObject();
+        userObj.id = userObj._id;
+        res.json({ msg: 'Profile updated successfully', user: userObj });
+    } catch (err) {
+        res.status(500).json({ msg: 'Server error' });
+    }
+});
+
 // Request password recovery
 router.post('/forgot-password', async (req, res) => {
     const { email } = req.body || {};
@@ -557,7 +632,17 @@ router.post('/reset-password', async (req, res) => {
 router.get('/', auth, async (req, res) => {
     try {
         const user = await User.findById(req.user.id).select('-password');
-        res.json(user);
+        if (!user) return res.status(404).json({ msg: 'User not found' });
+        const userObj = user.toObject();
+        userObj.id = userObj._id;
+        if (user.role === 'babysitter') {
+            const sitter = await Babysitter.findOne({ userId: user._id }).select('+photoFile');
+            if (sitter) {
+                userObj.name = sitter.name;
+                userObj.photoUrl = sitter.photoFile ? `/api/babysitter/photo/${sitter._id}` : null;
+            }
+        }
+        res.json({ user: userObj, ...userObj });
     } catch (err) {
         res.status(500).send('Server error');
     }

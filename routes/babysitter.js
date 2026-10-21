@@ -14,11 +14,39 @@ const { sendNotification } = require('../services/notificationService');
 const { saveFileToDatabase, serveFile, deleteStoredFile, privateDir } = require('../utils/fileStorage');
 
 const upload = multer({
-    storage: multer.diskStorage({ destination: privateDir, filename: (_req, file, cb) => { const ext = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'application/pdf': '.pdf' }[file.mimetype] || ''; cb(null, `${crypto.randomBytes(24).toString('hex')}${ext}`); } }),
-    limits: { fileSize: 5 * 1024 * 1024, files: 4 },
-    fileFilter: (_req, file, cb) => { const photo = file.fieldname === 'photo'; const ok = photo ? /^image\/(jpeg|png|webp)$/.test(file.mimetype) : /^(image\/(jpeg|png|webp)|application\/pdf)$/.test(file.mimetype); cb(ok ? null : new Error(photo ? 'Profile photo must be JPG, PNG, or WebP' : 'Only JPG, PNG, WebP, or PDF documents are accepted'), ok); }
+    storage: multer.diskStorage({
+        destination: privateDir,
+        filename: (_req, file, cb) => {
+            const ext = {
+                'image/jpeg': '.jpg',
+                'image/jpg': '.jpg',
+                'image/pjpeg': '.jpg',
+                'image/png': '.png',
+                'image/webp': '.webp',
+                'image/heic': '.jpg',
+                'image/heif': '.jpg',
+                'application/pdf': '.pdf'
+            }[file.mimetype.toLowerCase()] || path.extname(file.originalname) || '.jpg';
+            cb(null, `${crypto.randomBytes(24).toString('hex')}${ext}`);
+        }
+    }),
+    limits: { fileSize: 10 * 1024 * 1024, files: 5 },
+    fileFilter: (_req, file, cb) => {
+        const photo = file.fieldname === 'photo';
+        const isImage = /^image\/(jpe?g|png|webp|pjpeg|heic|heif)$/i.test(file.mimetype) || /\.(jpe?g|png|webp|heic|heif)$/i.test(file.originalname);
+        const isDoc = isImage || file.mimetype === 'application/pdf' || /\.pdf$/i.test(file.originalname);
+        const ok = photo ? isImage : isDoc;
+        cb(ok ? null : new Error(photo ? 'Profile photo must be JPG, PNG, or WebP' : 'Only JPG, PNG, WebP, or PDF documents are accepted'), ok);
+    }
 });
-const documentUpload = upload.fields([{ name: 'photo', maxCount: 1 }, { name: 'nationalId', maxCount: 1 }, { name: 'passport', maxCount: 1 }, { name: 'residency', maxCount: 1 }]);
+const documentUpload = upload.fields([
+    { name: 'photo', maxCount: 1 },
+    { name: 'nationalId', maxCount: 1 },
+    { name: 'passport', maxCount: 1 },
+    { name: 'residency', maxCount: 1 },
+    { name: 'documents', maxCount: 2 },
+    { name: 'verificationDocuments', maxCount: 2 }
+]);
 
 
 const router = express.Router();
@@ -48,12 +76,18 @@ router.get('/profile', auth, async (req, res) => {
         return res.status(403).json({ msg: 'Access denied' });
     }
     try {
-        const babysitter = await Babysitter.findOne({ userId: req.user.id }).select('+photoFile +nationalIdFile +passportFile +residencyFile');
+        const babysitter = await Babysitter.findOne({ userId: req.user.id }).select('+photoFile +nationalIdFile +passportFile +residencyFile +verificationDocumentFiles');
         if (!babysitter) return res.status(404).json({ msg: 'Babysitter profile not found' });
         const profile = babysitter.toObject();
-        profile.verificationDocuments = { nationalId: !!profile.nationalIdFile, passport: !!profile.passportFile, residency: !!profile.residencyFile };
+        profile.verificationDocuments = {
+            nationalId: !!profile.nationalIdFile,
+            passport: !!profile.passportFile,
+            residency: !!profile.residencyFile,
+            count: (profile.verificationDocumentFiles?.length) || (Boolean(profile.nationalIdFile) + Boolean(profile.passportFile))
+        };
+        profile.documentsCount = profile.verificationDocuments.count;
         profile.photoUrl = profile.photoFile ? '/api/babysitter/profile/photo' : null;
-        delete profile.nationalIdFile; delete profile.passportFile; delete profile.residencyFile; delete profile.photoFile;
+        delete profile.nationalIdFile; delete profile.passportFile; delete profile.residencyFile; delete profile.photoFile; delete profile.verificationDocumentFiles;
         res.json(profile);
     } catch (err) {
         res.status(500).json({ msg: 'Unable to load profile' });
@@ -73,11 +107,16 @@ router.get('/profile/photo', auth, async (req, res) => {
 router.get('/profile/documents/:kind', auth, async (req, res) => {
     if (req.user.role !== 'babysitter') return res.status(403).json({ msg: 'Access denied' });
     const fieldByKind = { nationalId: 'nationalIdFile', passport: 'passportFile', residency: 'residencyFile' };
-    const field = fieldByKind[req.params.kind];
-    if (!field) return res.sendStatus(404);
     try {
-        const sitter = await Babysitter.findOne({ userId: req.user.id }).select('+' + field);
-        if (!sitter?.[field]) return res.sendStatus(404);
+        const sitter = await Babysitter.findOne({ userId: req.user.id }).select('+photoFile +nationalIdFile +passportFile +residencyFile +verificationDocumentFiles');
+        if (!sitter) return res.sendStatus(404);
+
+        const index = parseInt(req.params.kind, 10);
+        if (!isNaN(index) && sitter.verificationDocumentFiles && sitter.verificationDocumentFiles[index]) {
+            return serveFile(sitter.verificationDocumentFiles[index], res);
+        }
+        const field = fieldByKind[req.params.kind];
+        if (!field || !sitter[field]) return res.sendStatus(404);
         return serveFile(sitter[field], res);
     } catch (_) { res.sendStatus(404); }
 });
@@ -86,7 +125,7 @@ router.put('/profile', auth, async (req, res) => {
     if (req.user.role !== 'babysitter') {
         return res.status(403).json({ msg: 'Access denied' });
     }
-    const { phone, age, nationality, nationalityType, city, bio, monthlySalary, currency, services } = req.body;
+    const { name, phone, age, nationality, nationalityType, city, bio, monthlySalary, currency, services } = req.body;
     if (nationalityType !== undefined && !['egyptian', 'other'].includes(nationalityType)) return res.status(400).json({ msg: 'Choose a valid nationality document category' });
     if (currency !== undefined && !['EGP', 'USD'].includes(currency)) return res.status(400).json({ msg: 'Currency must be EGP or USD' });
     if (monthlySalary !== undefined && (!Number.isFinite(Number(monthlySalary)) || Number(monthlySalary) < 0)) return res.status(400).json({ msg: 'Monthly salary must be a non-negative number' });
@@ -106,6 +145,10 @@ router.put('/profile', auth, async (req, res) => {
         }
 
         // Update the profile fields
+        if (name !== undefined && typeof name === 'string' && name.trim()) {
+            babysitter.name = name.trim();
+            await User.updateOne({ _id: req.user.id }, { $set: { name: name.trim() } });
+        }
         if (phone !== undefined) babysitter.phone = phone;
         if (age !== undefined) babysitter.age = age;
         if (nationality !== undefined) babysitter.nationality = nationality;
@@ -165,7 +208,7 @@ router.post('/profile/documents', auth, (req, res, next) => {
 }, async (req, res) => {
     const files = req.files || {};
     try {
-        const sitter = await Babysitter.findOne({ userId: req.user.id }).select('+photoFile +nationalIdFile +passportFile +residencyFile');
+        const sitter = await Babysitter.findOne({ userId: req.user.id }).select('+photoFile +nationalIdFile +passportFile +residencyFile +verificationDocumentFiles');
         if (!sitter) { Object.values(files).flat().forEach((f) => fs.unlink(f.path, () => {})); return res.status(404).json({ msg: 'Babysitter profile not found' }); }
         const replace = async (key, field) => {
             if (!files[key]?.[0]) return;
@@ -178,9 +221,38 @@ router.post('/profile/documents', auth, (req, res, next) => {
         await replace('nationalId', 'nationalIdFile');
         await replace('passport', 'passportFile');
         await replace('residency', 'residencyFile');
+
+        // Handle up to 2 generic verification documents
+        const uploadedDocs = files.documents || files.verificationDocuments || [];
+        if (uploadedDocs.length > 0) {
+            if (sitter.verificationDocumentFiles && sitter.verificationDocumentFiles.length > 0) {
+                for (const oldDoc of sitter.verificationDocumentFiles) {
+                    await deleteStoredFile(oldDoc);
+                }
+            }
+            sitter.verificationDocumentFiles = [];
+            for (const file of uploadedDocs.slice(0, 2)) {
+                sitter.verificationDocumentFiles.push(file.filename);
+                await saveFileToDatabase(file.filename, file.path, file.mimetype);
+            }
+            if (uploadedDocs[0]) {
+                if (sitter.nationalIdFile) await deleteStoredFile(sitter.nationalIdFile);
+                sitter.nationalIdFile = uploadedDocs[0].filename;
+            }
+            if (uploadedDocs[1]) {
+                if (sitter.passportFile) await deleteStoredFile(sitter.passportFile);
+                sitter.passportFile = uploadedDocs[1].filename;
+            }
+        }
+
         if (files.photo?.length && !files.photo[0].mimetype.startsWith('image/')) return res.status(400).json({ msg: 'Profile photo must be an image' });
         sitter.moderationStatus = 'pending'; await sitter.save();
-        res.json({ msg: 'Documents uploaded for review', moderationStatus: sitter.moderationStatus });
+        res.json({
+            msg: 'Documents uploaded for review',
+            moderationStatus: sitter.moderationStatus,
+            photoUrl: sitter.photoFile ? '/api/babysitter/profile/photo' : null,
+            documentsCount: (sitter.verificationDocumentFiles?.length) || (Boolean(sitter.nationalIdFile) + Boolean(sitter.passportFile))
+        });
     } catch (err) { Object.values(files).flat().forEach((f) => fs.unlink(f.path, () => {})); res.status(500).json({ msg: 'Unable to save uploaded documents' }); }
 });
 
@@ -316,7 +388,10 @@ router.post('/:id/reviews', auth, async (req, res) => {
     try {
         const sitter = await Babysitter.findById(req.params.id);
         if (!sitter) {
-            return res.status(404).json({ msg: 'Caregiver profile not found' });
+            return res.status(404).json({ msg: 'Caregiver profile not found. Regular users cannot be rated.' });
+        }
+        if (sitter.userId && sitter.userId.toString() === req.user.id) {
+            return res.status(400).json({ msg: 'You cannot rate your own profile' });
         }
 
         const reviewer = await User.findById(req.user.id).select('name username');
@@ -437,7 +512,11 @@ router.post('/register', async (req, res) => {
         const payload = {
             user: {
                 id: user.id,
-                role: user.role
+                username: user.username,
+                email: user.email,
+                role: user.role,
+                name: babysitter.name,
+                photoUrl: null
             }
         };
 
@@ -447,7 +526,7 @@ router.post('/register', async (req, res) => {
             { expiresIn: '1h' },
             (err, token) => {
                 if (err) throw err;
-                res.json({ token });
+                res.json({ token, user: payload.user });
             }
         );
     } catch (err) {
