@@ -741,7 +741,7 @@ function renderHtmlDocs(catalog) {
         </div>
 
         <footer class="footer">
-            <p>CareNest Platform &bull; <a href="https://dmansour2000.github.io/reactjsbabysitterbookingplatformfrontend" target="_blank" rel="noopener">CareNest Web App</a> &bull; Interactive API Documentation</p>
+            <p>CareNest Platform &bull; <a href="https://dmansour2000.github.io" target="_blank" rel="noopener">CareNest Web App</a> &bull; Interactive API Documentation</p>
         </footer>
     </main>
 

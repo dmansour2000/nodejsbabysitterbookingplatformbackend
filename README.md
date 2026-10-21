@@ -1,6 +1,6 @@
 # CareNest Babysitter Booking Backend
 
-This repository contains the Express and MongoDB API for CareNest. The React frontend is maintained separately and is published at [dmansour2000.github.io/reactjsbabysitterbookingplatformfrontend](https://dmansour2000.github.io/reactjsbabysitterbookingplatformfrontend).
+This repository contains the Express and MongoDB API for CareNest. The React frontend is maintained separately and is published at [dmansour2000.github.io](https://dmansour2000.github.io).
 
 ## API Documentation
 
@@ -53,7 +53,7 @@ RESEND_FROM_EMAIL=CareNest <onboarding@resend.dev>
 EMAIL_PROVIDER=brevo
 
 # Frontend & OAuth Settings
-FRONTEND_URL=https://dmansour2000.github.io/reactjsbabysitterbookingplatformfrontend
+FRONTEND_URL=https://dmansour2000.github.io
 GOOGLE_CLIENT_ID=<google-oauth-client-id>
 
 # Server Port (Optional; defaults to 5170 locally; hosts like Render assign PORT automatically)
@@ -74,7 +74,7 @@ PORT=5170
 | `RESEND_API_KEY` | Optional | Resend API key (`re_...`) for transactional email delivery. |
 | `RESEND_FROM_EMAIL` | Optional | Verified sender address in Resend. |
 | `EMAIL_PROVIDER` | Optional | Explicitly choose `"brevo"`, `"gmail"`, or `"resend"`. |
-| `FRONTEND_URL` | Required | Public URL of the frontend (e.g. `https://dmansour2000.github.io/reactjsbabysitterbookingplatformfrontend`). Used to construct password reset links. |
+| `FRONTEND_URL` | Required | Public URL of the frontend (e.g. `https://dmansour2000.github.io`). Used to construct password reset links. |
 | `GOOGLE_CLIENT_ID` | Optional | Google OAuth 2.0 Web Client ID used to verify Google Sign-In tokens on the backend. |
 | `PORT` | Optional | HTTP port. Defaults to `5170` locally; hosting providers supply it automatically. |
 

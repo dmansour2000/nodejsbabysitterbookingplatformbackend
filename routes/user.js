@@ -588,7 +588,7 @@ router.post('/forgot-password', async (req, res) => {
             { expiresIn: '15m' }
         );
 
-        const frontendUrl = process.env.FRONTEND_URL || 'https://dmansour2000.github.io/reactjsbabysitterbookingplatformfrontend';
+        const frontendUrl = process.env.FRONTEND_URL || 'https://dmansour2000.github.io';
         const cleanBaseUrl = frontendUrl.replace(/\/+$/, '');
         const resetUrl = `${cleanBaseUrl}/?token=${token}`;
 
