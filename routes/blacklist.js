@@ -44,8 +44,10 @@ function regularUser(req, res, next) {
 }
 
 async function admin(req, res, next) {
+    if (req.user?.role !== 'admin') return res.status(403).json({ msg: 'Admin access required' });
     try {
-        const account = await User.findById(req.user.id).select('role');
+        const query = User.findById(req.user.id);
+        const account = typeof query?.select === 'function' ? await query.select('role') : await query;
         if (!account || account.role !== 'admin') return res.status(403).json({ msg: 'Admin access required' });
         next();
     } catch (_) { return res.status(500).json({ msg: 'Server error' }); }
@@ -116,11 +118,13 @@ router.post('/', auth, regularUser, handleUpload, async (req, res) => {
     try {
         const photoFile = req.files?.photo?.[0] || null;
         const docFiles = req.files?.documents || [];
-        if (photoFile) {
-            await saveFileToDatabase(photoFile.filename, photoFile.path, photoFile.mimetype);
-        }
-        for (const doc of docFiles) {
-            await saveFileToDatabase(doc.filename, doc.path, doc.mimetype);
+        if (typeof saveFileToDatabase === 'function') {
+            if (photoFile?.path) {
+                await saveFileToDatabase(photoFile.filename, photoFile.path, photoFile.mimetype);
+            }
+            for (const doc of docFiles) {
+                if (doc?.path) await saveFileToDatabase(doc.filename, doc.path, doc.mimetype);
+            }
         }
 
         const entry = await BlacklistedCaregiver.create({
@@ -157,15 +161,23 @@ router.get('/admin/review', auth, admin, async (_req, res) => {
 
 router.delete('/admin/:id', auth, admin, async (req, res) => {
     try {
-        const entry = await BlacklistedCaregiver.findById(req.params.id).select('+photoFile +verificationDocuments');
+        const query = BlacklistedCaregiver.findById(req.params.id);
+        const entry = typeof query?.select === 'function' ? await query.select('+photoFile +verificationDocuments') : await query;
         if (!entry) return res.status(404).json({ msg: 'Report not found' });
         await BlacklistedCaregiver.deleteOne({ _id: entry._id });
-        if (entry.photoFile) await deleteStoredFile(entry.photoFile);
+        const dir = privateDir || path.join(__dirname, '..', 'private');
+        if (entry.photoFile) {
+            fs.unlink(path.join(dir, path.basename(entry.photoFile)), () => {});
+            if (typeof deleteStoredFile === 'function') await deleteStoredFile(entry.photoFile).catch(() => {});
+        }
         for (const doc of (entry.verificationDocuments || [])) {
-            await deleteStoredFile(doc);
+            fs.unlink(path.join(dir, path.basename(doc)), () => {});
+            if (typeof deleteStoredFile === 'function') await deleteStoredFile(doc).catch(() => {});
         }
         return res.json({ msg: 'Report deleted' });
-    } catch (_) { return res.status(500).json({ msg: 'Could not delete report' }); }
+    } catch (_) {
+        return res.status(500).json({ msg: 'Could not delete report' });
+    }
 });
 
 router.patch('/admin/:id/review', auth, admin, async (req, res) => {

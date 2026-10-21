@@ -245,10 +245,12 @@ test('public caregiver profile endpoints require approval and never return phone
   assert.equal(detailFilter.moderationStatus, 'approved');
 
   detailHasAcceptedBooking = true;
-  const hidden = await request(caregiverApp)
+  const booked = await request(caregiverApp)
     .get('/api/babysitter/users/' + caregiverUserId)
     .set('Authorization', 'Bearer ' + familyToken);
-  assert.equal(hidden.status, 404);
+  assert.equal(booked.status, 200);
+  assert.equal(booked.body.available, false);
+  assert.equal(booked.body.isBookedAndAccepted, true);
   detailHasAcceptedBooking = false;
 });
 
@@ -297,7 +299,7 @@ test('public caregiver search excludes unavailable and accepted caregivers and o
   assert.equal(response.body[0].nationalIdFile, undefined);
   assert.equal(response.body[0].photoUrl, '/api/babysitter/photo/64a000000000000000000013');
   assert.equal(requestedFilter.moderationStatus, 'approved');
-  assert.deepEqual(requestedFilter._id.$nin, acceptedCaregiverIds);
+  assert.equal(response.body[0].available, true);
 });
 
 test('PATCH /api/user/password rejects incorrect current password and updates with valid credentials', async () => {

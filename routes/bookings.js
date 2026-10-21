@@ -292,7 +292,7 @@ router.patch('/:id/status', auth, currentAccount, async (req, res) => {
                         }).catch((e) => console.warn('Status notification error:', e.message));
                     }
                 } else if (req.account.role === 'babysitter') {
-                    const sitterProfile = await Babysitter.findById(booking.babysitterId).select('name');
+                    const sitterProfile = typeof Babysitter?.findById === 'function' ? await Babysitter.findById(booking.babysitterId).select('name') : null;
                     sendNotification({
                         recipientId: booking.parentId,
                         type: 'booking_cancelled',
@@ -305,7 +305,7 @@ router.patch('/:id/status', auth, currentAccount, async (req, res) => {
                     }).catch((e) => console.warn('Status notification error:', e.message));
                 }
             } else if (status === 'declined') {
-                const sitterProfile = await Babysitter.findById(booking.babysitterId).select('name');
+                const sitterProfile = typeof Babysitter?.findById === 'function' ? await Babysitter.findById(booking.babysitterId).select('name') : null;
                 sendNotification({
                     recipientId: booking.parentId,
                     type: 'booking_declined',

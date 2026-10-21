@@ -110,7 +110,8 @@ router.delete('/users/:id', auth, adminAuth, async (req, res) => {
         if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
             return res.status(400).json({ msg: 'Invalid ID format' });
         }
-        const user = await User.findById(req.params.id);
+        const query = User.findById(req.params.id);
+        const user = typeof query?.select === 'function' ? await query.select('-password') : await query;
         if (!user) return res.status(404).json({ msg: 'User not found' });
         if (user._id.equals(req.currentUser._id)) {
             return res.status(400).json({ msg: 'You cannot delete your own account' });

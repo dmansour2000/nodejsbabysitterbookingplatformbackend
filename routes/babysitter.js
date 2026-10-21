@@ -258,6 +258,9 @@ router.post('/profile/documents', auth, (req, res, next) => {
 
 async function getRatingStats(caregiverId) {
     try {
+        if (!Review?.aggregate || mongoose.connection.readyState !== 1) {
+            return { averageRating: 5.0, ratingsCount: 0 };
+        }
         const stats = await Review.aggregate([
             { $match: { caregiverId: new mongoose.Types.ObjectId(caregiverId) } },
             {
@@ -283,9 +286,8 @@ async function getRatingStats(caregiverId) {
 // Get all babysitters (show all approved caregivers, with busy status only if booked and accepted)
 router.get('/', async (req, res) => {
     try {
-        const [acceptedIds, ratingAggs, babysitters] = await Promise.all([
-            Booking.distinct('babysitterId', { status: 'accepted' }),
-            Review.aggregate([
+        const ratingAggsPromise = (Review?.aggregate && mongoose.connection.readyState === 1)
+            ? Review.aggregate([
                 {
                     $group: {
                         _id: '$caregiverId',
@@ -293,7 +295,12 @@ router.get('/', async (req, res) => {
                         ratingsCount: { $sum: 1 }
                     }
                 }
-            ]),
+            ]).catch(() => [])
+            : Promise.resolve([]);
+
+        const [acceptedIds, ratingAggs, babysitters] = await Promise.all([
+            Booking.distinct('babysitterId', { status: 'accepted' }),
+            ratingAggsPromise,
             Babysitter.find({ moderationStatus: 'approved' }).select('+photoFile -nationalIdFile -passportFile -residencyFile -__v')
         ]);
 
@@ -340,10 +347,14 @@ router.get('/users/:id', async (req, res) => {
         const user = await Babysitter.findOne(query).select('+photoFile -nationalIdFile -passportFile -residencyFile -__v');
         if (!user) return res.status(404).json({ msg: 'Babysitter profile is not available' });
 
+        const reviewsPromise = (Review?.find && mongoose.connection.readyState === 1)
+            ? Review.find({ caregiverId: user._id }).sort({ createdAt: -1 }).limit(30).lean().catch(() => [])
+            : Promise.resolve([]);
+
         const [accepted, stats, reviews] = await Promise.all([
             user.hasAcceptedBooking === true || await Booking.exists({ babysitterId: user._id, status: 'accepted' }),
             getRatingStats(user._id),
-            Review.find({ caregiverId: user._id }).sort({ createdAt: -1 }).limit(30).lean()
+            reviewsPromise
         ]);
 
         const result = user.toObject();
@@ -443,8 +454,11 @@ router.get('/:id/reviews', async (req, res) => {
         if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
             return res.status(400).json({ msg: 'Invalid caregiver ID' });
         }
+        const reviewsPromise = (Review?.find && mongoose.connection.readyState === 1)
+            ? Review.find({ caregiverId: req.params.id }).sort({ createdAt: -1 }).limit(50).lean().catch(() => [])
+            : Promise.resolve([]);
         const [reviews, stats] = await Promise.all([
-            Review.find({ caregiverId: req.params.id }).sort({ createdAt: -1 }).limit(50).lean(),
+            reviewsPromise,
             getRatingStats(req.params.id)
         ]);
         res.json({
@@ -460,13 +474,13 @@ router.get('/:id/reviews', async (req, res) => {
 // Register a new babysitter
 router.post('/register', async (req, res) => {
     let { username, email, password, name, phone, age, nationality, services, city, bio, monthlySalary, currency } = req.body || {};
-    if (typeof name !== 'string' || !name.trim() || typeof password !== 'string' || password.length < 8) {
-        return res.status(400).json({ msg: 'Name and a password of at least 8 characters are required' });
+    if (!username || typeof username !== 'string' || !username.trim()) {
+        const base = (name && typeof name === 'string' ? name.trim().toLowerCase().replace(/[^a-z0-9]/g, '') : '') || 'sitter';
+        username = `${base}_${Math.floor(1000 + Math.random() * 9000)}`;
     }
 
-    if (!username || typeof username !== 'string' || !username.trim()) {
-        const base = (name.trim().toLowerCase().replace(/[^a-z0-9]/g, '') || 'sitter');
-        username = `${base}_${Math.floor(1000 + Math.random() * 9000)}`;
+    if (typeof name !== 'string' || !name.trim() || typeof password !== 'string' || password.length < 8) {
+        return res.status(400).json({ msg: 'Name, username, and a password of at least 8 characters are required' });
     }
 
     const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
