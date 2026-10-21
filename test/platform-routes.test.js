@@ -10,7 +10,7 @@ process.env.GOOGLE_CLIENT_ID = 'test-google-client-id';
 const parentId = '64a000000000000000000010';
 const caregiverUserId = '64a000000000000000000011';
 const caregiverProfileId = '64a000000000000000000012';
-let loginUser = { id: parentId, _id: parentId, username: 'family', role: 'user', password: 'hashed-password' };
+let loginUser = { id: parentId, _id: parentId, username: 'family', role: 'user', password: 'hashed-password', email: 'family@example.com' };
 let googlePayload = null;
 let comparePassword = true;
 let publicProfiles = [];
@@ -23,9 +23,12 @@ const acceptedCaregiverIds = [caregiverProfileId];
 const userModel = {
   findOne: async (filter = {}) => {
     if (filter.email && filter._id?.$ne) return null;
-    return (filter.username || filter.email) ? loginUser : null;
+    if (filter.googleId && loginUser?.googleId) {
+      return filter.googleId === loginUser.googleId ? loginUser : null;
+    }
+    return (filter.username || (filter.email && filter.email === loginUser?.email)) ? loginUser : null;
   },
-  find: () => ({ limit: async () => [] }),
+  find: (filter = {}) => ({ limit: async () => (filter?.email && loginUser?.email && filter.email === loginUser.email ? [loginUser] : []) }),
   findById: (id) => {
     const user = { _id: id || parentId, id: id || parentId, role: 'user', username: 'family', name: 'Family', password: 'hashed-password', email: 'family@example.com', save: async () => {} };
     return Object.assign(Promise.resolve(user), { select: async () => user });
@@ -136,7 +139,7 @@ test('login rejects admin accounts attempting to log in from mobile client', asy
   assert.equal(webAccepted.status, 200);
   assert.equal(webAccepted.body.user.role, 'admin');
 
-  loginUser = { id: parentId, _id: parentId, username: 'family', role: 'user', password: 'hashed-password' };
+  loginUser = { id: parentId, _id: parentId, username: 'family', role: 'user', password: 'hashed-password', email: 'family@example.com' };
 });
 
 
@@ -184,6 +187,26 @@ test('new Google registrants receive a pending registration token before choosin
   const claims = jwt.verify(response.body.registrationToken, process.env.JWT_SECRET);
   assert.equal(claims.purpose, 'google-registration');
   assert.equal(claims.email, 'new-google-user@example.com');
+});
+
+test('Google OAuth in register flow rejects accounts with an existing email', async () => {
+  const nonceResponse = await request(userApp)
+    .post('/api/user/oauth/nonce')
+    .send({ provider: 'google' });
+  googlePayload = {
+    sub: 'another-google-sub',
+    email: 'family@example.com',
+    email_verified: true,
+    name: 'Existing Family',
+    nonce: nonceResponse.body.nonce,
+  };
+
+  const response = await request(userApp)
+    .post('/api/user/oauth')
+    .send({ provider: 'google', flow: 'register', credential: 'verified-google-token', nonce: nonceResponse.body.nonce });
+
+  assert.equal(response.status, 409);
+  assert.equal(response.body.msg, 'Email is already registered to another account');
 });
 
 test('Google registration completion requires a supported account type', async () => {

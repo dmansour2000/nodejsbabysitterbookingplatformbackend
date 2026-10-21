@@ -187,6 +187,9 @@ router.post('/oauth', async (req, res) => {
             }
 
             if (user) {
+                if (flow === 'register') {
+                    return res.status(409).json({ msg: 'Email is already registered to another account' });
+                }
                 // Google has verified this email, so link it to the matching existing account.
                 user.googleId = claims.sub;
                 user.email = email;
@@ -208,6 +211,8 @@ router.post('/oauth', async (req, res) => {
             } else {
                 return res.status(404).json({ msg: 'No account was found for this Google account. Register first.' });
             }
+        } else if (flow === 'register') {
+            return res.status(409).json({ msg: 'Email is already registered to another account' });
         }
 
         const isMobileClient = req.header('x-client-platform') === 'mobile' || req.body?.platform === 'mobile';
