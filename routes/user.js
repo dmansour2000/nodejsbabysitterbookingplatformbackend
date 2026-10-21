@@ -16,7 +16,7 @@ const router = express.Router();
 
 function auth(req, res, next) {
     const authorization = req.header('Authorization');
-    const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : null;
+    const token = (authorization?.startsWith('Bearer ') ? authorization.slice(7) : null) || req.header('x-auth-token');
 
     if (!token) {
         return res.status(401).json({ msg: 'No token, authorization denied' });
