@@ -12,7 +12,7 @@ The documentation covers all 40+ endpoints with HTTP methods, summaries, paramet
 
 ## Requirements
 
-- Node.js (the project currently declares Node.js 23.5)
+- Node.js (Node.js >= 20.0.0; compatible with Node.js 20 LTS, 22 LTS, and 23+)
 - MongoDB connection string
 
 ## Run locally
