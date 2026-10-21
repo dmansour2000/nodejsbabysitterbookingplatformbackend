@@ -75,7 +75,7 @@ function publicEntry(entry) {
 router.get('/', async (_req, res) => {
     try {
         const entries = await BlacklistedCaregiver.find({ status: 'approved' })
-            .select('name nationality age reason status createdAt')
+            .select('name nationality age reason status createdAt +photoFile')
             .sort({ createdAt: -1 }).lean();
         return res.json(entries.map((entry) => ({
             _id: entry._id,
@@ -85,7 +85,7 @@ router.get('/', async (_req, res) => {
             reason: entry.reason,
             status: 'approved',
             createdAt: entry.createdAt,
-            photoUrl: `/api/blacklist/${entry._id}/photo`,
+            photoUrl: entry.photoFile ? `/api/blacklist/${entry._id}/photo` : null,
         })));
     } catch (error) {
         console.error('Could not load approved caregiver reports:', error.message);
@@ -108,18 +108,17 @@ router.post('/', auth, regularUser, handleUpload, async (req, res) => {
     const normalizedNationality = typeof nationality === 'string' ? nationality.trim() : '';
     const normalizedReason = typeof reason === 'string' ? reason.trim() : '';
     const numericAge = age === undefined || age === '' ? undefined : Number(age);
-    if (!req.files?.photo?.[0]) {
-        removeFiles(files);
-        return res.status(400).json({ msg: 'A profile photo is required' });
-    }
+
     if (!normalizedName || normalizedName.length > 100 || !normalizedNationality || normalizedNationality.length > 80 || normalizedReason.length < 10 || normalizedReason.length > 2000 || (numericAge !== undefined && (!Number.isInteger(numericAge) || numericAge < 18 || numericAge > 100))) {
         removeFiles(files);
         return res.status(400).json({ msg: 'Enter a name, nationality, a reason of 10 to 2000 characters, and a valid optional age' });
     }
     try {
-        const photoFile = req.files.photo[0];
-        const docFiles = req.files.documents || [];
-        await saveFileToDatabase(photoFile.filename, photoFile.path, photoFile.mimetype);
+        const photoFile = req.files?.photo?.[0] || null;
+        const docFiles = req.files?.documents || [];
+        if (photoFile) {
+            await saveFileToDatabase(photoFile.filename, photoFile.path, photoFile.mimetype);
+        }
         for (const doc of docFiles) {
             await saveFileToDatabase(doc.filename, doc.path, doc.mimetype);
         }
@@ -130,7 +129,7 @@ router.post('/', auth, regularUser, handleUpload, async (req, res) => {
             nationality: normalizedNationality,
             ...(numericAge !== undefined ? { age: numericAge } : {}),
             reason: normalizedReason,
-            photoFile: photoFile.filename,
+            ...(photoFile ? { photoFile: photoFile.filename } : {}),
             verificationDocuments: docFiles.map((file) => file.filename),
             status: 'pending',
         });
