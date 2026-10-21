@@ -93,14 +93,16 @@ async function sendViaGmail({ to, subject, html, text }) {
     }
 
     const transporter = nodemailer.createTransport({
-        service: 'gmail',
+        host: 'smtp.gmail.com',
+        port: 465,
+        secure: true,
         auth: {
             user,
             pass: pass.replace(/\s+/g, ''),
         },
-        connectionTimeout: 10000, // 10s timeout
-        greetingTimeout: 10000,
-        socketTimeout: 15000,
+        connectionTimeout: 15000,
+        greetingTimeout: 15000,
+        socketTimeout: 20000,
     });
 
     const from = process.env.GMAIL_FROM || `CareNest <${user}>`;
@@ -119,33 +121,29 @@ async function sendViaGmail({ to, subject, html, text }) {
 async function sendEmail({ to, subject, html, text }) {
     const gmailUser = process.env.GMAIL_USER || process.env.SMTP_USER || process.env.EMAIL_USER;
     const gmailPass = process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_PASS || process.env.SMTP_PASS || process.env.EMAIL_PASS;
-    const provider = (process.env.EMAIL_PROVIDER || '').toLowerCase();
+    const provider = (process.env.EMAIL_PROVIDER || 'gmail').toLowerCase();
 
     // 1. Explicit Resend provider preference
     if (provider === 'resend') {
         return sendViaResend({ to, subject, html, text });
     }
 
-    // 2. Gmail SMTP if credentials provided (or provider === 'gmail')
+    // 2. Default: Gmail SMTP
     if (gmailUser && gmailPass) {
-        try {
-            return await sendViaGmail({ to, subject, html, text });
-        } catch (gmailError) {
-            console.error('[Mailer] Gmail SMTP delivery failed:', gmailError.message);
-            if (process.env.RESEND_API_KEY) {
-                console.warn('[Mailer] Falling back to Resend API...');
-                return sendViaResend({ to, subject, html, text });
-            }
-            throw gmailError;
-        }
+        return await sendViaGmail({ to, subject, html, text });
     }
 
-    // 3. Resend API
+    // If default is gmail but credentials are not found in environment
+    if (provider === 'gmail') {
+        throw new Error('Gmail SMTP credentials are not configured. Please set GMAIL_USER and GMAIL_APP_PASSWORD in your environment variables.');
+    }
+
+    // 3. Fallback to Resend only if explicitly configured or non-gmail provider
     if (process.env.RESEND_API_KEY) {
         return sendViaResend({ to, subject, html, text });
     }
 
-    throw new Error('No email provider is configured. Please provide GMAIL_USER and GMAIL_APP_PASSWORD, or RESEND_API_KEY in backend/.env.');
+    throw new Error('No email provider is configured. Please provide GMAIL_USER and GMAIL_APP_PASSWORD in environment variables.');
 }
 
 async function sendPasswordResetEmail({ to, resetUrl, name }) {
