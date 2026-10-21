@@ -393,9 +393,24 @@ router.post('/register', async (req, res) => {
 
 // Login user
 router.post('/login', async (req, res) => {
-    const { username, password } = req.body;
+    const { username, email, identifier, password } = req.body || {};
+    const rawLogin = (identifier || email || username || '').trim();
+    if (!rawLogin || !password) {
+        return res.status(400).json({ msg: 'Invalid credentials' });
+    }
+
     try {
-        const user = await User.findOne({ username });
+        const isEmail = rawLogin.includes('@');
+        let user = isEmail
+            ? await User.findOne({ email: rawLogin.toLowerCase() })
+            : await User.findOne({ username: rawLogin });
+
+        if (!user) {
+            user = isEmail
+                ? await User.findOne({ username: rawLogin })
+                : await User.findOne({ email: rawLogin.toLowerCase() });
+        }
+
         if (!user?.password) return res.status(400).json({ msg: 'Invalid credentials' });
 
         const isMatch = await bcrypt.compare(password, user.password);
