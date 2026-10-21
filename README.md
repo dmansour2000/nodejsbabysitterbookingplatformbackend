@@ -18,29 +18,48 @@ npm install
 Create a `.env` file in this directory with the backend settings below. Replace every placeholder with your own value; never put real secrets in this README or commit your `.env` file.
 
 ```env
+# Database & Authentication (Required)
 MONGO_URI=mongodb+srv://<username>:<password>@<cluster>/<database>?retryWrites=true&w=majority
 JWT_SECRET=<long-random-secret>
+
+# Initial Superadmin Account (Required)
 SUPERADMIN_USERNAME=<initial-superadmin-username>
 SUPERADMIN_PASSWORD=<initial-superadmin-password>
+
+# Email Delivery - Option 1: Gmail SMTP (Recommended for development/testing without a custom domain)
+# Generate a 16-character App Password at: https://myaccount.google.com/apppasswords
+GMAIL_USER=<your-email@gmail.com>
+GMAIL_APP_PASSWORD=<16-character-google-app-password>
+
+# Email Delivery - Option 2: Resend (For production transactional email or API-based testing)
 RESEND_API_KEY=<resend-api-key>
-RESEND_FROM_EMAIL=CareNest <verified-sender@example.com>
-FRONTEND_URL=https://your-frontend.example.com
+RESEND_FROM_EMAIL=CareNest <onboarding@resend.dev>
+
+# Optional Email Provider Switch: "gmail" or "resend" (defaults to gmail if credentials provided, else resend)
+# EMAIL_PROVIDER=gmail
+
+# Frontend & OAuth Settings
+FRONTEND_URL=https://dmansour2000.github.io/reactjsbabysitterbookingplatformfrontend
 GOOGLE_CLIENT_ID=<google-oauth-client-id>
-# Optional; defaults to 5170 locally and uses the host-provided port when deployed.
+
+# Server Port (Optional; defaults to 5170 locally; hosts like Render assign PORT automatically)
 PORT=5170
 ```
 
-| Variable | Purpose |
-| --- | --- |
-| `MONGO_URI` | MongoDB connection string. Required by the API. |
-| `JWT_SECRET` | Secret used to sign and verify login tokens. Required by the API. Generate a unique value, for example with `node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"`. |
-| `SUPERADMIN_USERNAME` | Username for the initial superadmin account. |
-| `SUPERADMIN_PASSWORD` | Password for the initial superadmin account. Use a strong, unique password. |
-| `RESEND_API_KEY` | Resend API key for sending account emails. |
-| `RESEND_FROM_EMAIL` | Sender name and address verified with Resend, for example `CareNest <you@example.com>`. |
-| `FRONTEND_URL` | Public frontend origin used when creating links back to the website. |
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID used by the website's Google sign-in flow. |
-| `PORT` | Optional HTTP port. Defaults to `5170` locally; hosting providers such as Render supply it automatically. |
+| Variable | Requirement | Purpose |
+| --- | --- | --- |
+| `MONGO_URI` | Required | MongoDB connection string. |
+| `JWT_SECRET` | Required | Secret used to sign and verify JWT authentication and password recovery tokens. Generate a unique value with `node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"`. |
+| `SUPERADMIN_USERNAME` | Required | Username for the initial superadmin account. |
+| `SUPERADMIN_PASSWORD` | Required | Password for the initial superadmin account. Use a strong, unique password. |
+| `GMAIL_USER` | Optional | Gmail address used to send transactional emails (e.g. password resets) via Gmail SMTP without domain verification restrictions. |
+| `GMAIL_APP_PASSWORD` | Optional | 16-character Google App Password (generated in Google Account > Security > 2-Step Verification > App Passwords). |
+| `RESEND_API_KEY` | Optional | Resend API key (`re_...`) for transactional email delivery. |
+| `RESEND_FROM_EMAIL` | Optional | Verified sender address in Resend (e.g. `CareNest <onboarding@resend.dev>` for testing, or `CareNest <support@yourdomain.com>` once a custom domain is verified). |
+| `EMAIL_PROVIDER` | Optional | Explicitly choose `"gmail"` or `"resend"`. Defaults to Gmail SMTP when credentials are set, falling back to Resend API. |
+| `FRONTEND_URL` | Required | Public URL of the frontend (e.g. `https://dmansour2000.github.io/reactjsbabysitterbookingplatformfrontend`). Used to construct password reset links. |
+| `GOOGLE_CLIENT_ID` | Optional | Google OAuth 2.0 Web Client ID used to verify Google Sign-In tokens on the backend. |
+| `PORT` | Optional | HTTP port. Defaults to `5170` locally; hosting providers supply it automatically. |
 
 For local MongoDB, `MONGO_URI` can be `mongodb://127.0.0.1:27017/babysitter-booking`. Keep `.env` private and never commit it. Start MongoDB, then start the API:
 
@@ -52,7 +71,10 @@ The API listens on `http://localhost:5170` by default. The frontend development 
 
 ## Deploy
 
-The backend is deployed separately from the GitHub Pages frontend. Configure the `.env` values in the backend hosting service, including `MONGO_URI`, `JWT_SECRET`, `SUPERADMIN_USERNAME`, `SUPERADMIN_PASSWORD`, `RESEND_API_KEY`, `RESEND_FROM_EMAIL`, `FRONTEND_URL`, and `GOOGLE_CLIENT_ID`. The host-provided `PORT` is optional in configuration; the server uses it automatically when available, and otherwise defaults to `5170`.
+The backend is deployed separately from the GitHub Pages frontend. Configure the `.env` values in your backend hosting service (such as Render):
+- **Core**: `MONGO_URI`, `JWT_SECRET`, `SUPERADMIN_USERNAME`, `SUPERADMIN_PASSWORD`, `FRONTEND_URL`, and `GOOGLE_CLIENT_ID`.
+- **Email**: Either `GMAIL_USER` and `GMAIL_APP_PASSWORD` (for Gmail SMTP), or `RESEND_API_KEY` and `RESEND_FROM_EMAIL` (for Resend).
+- The host-provided `PORT` is assigned automatically by hosts like Render; it defaults to `5170` locally.
 
 The backend accepts profile photos and identity documents. Do not serve its `private_uploads/` directory as static files. Local disk on many hosting plans is temporary; configure persistent private storage before relying on uploaded documents in production.
 
