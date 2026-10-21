@@ -5,14 +5,14 @@
 
 const API_METADATA = {
     title: 'CareNest Babysitter Booking Platform API',
-    version: '1.0.0',
-    description: 'Complete RESTful API for CareNest — powering parent bookings, caregiver verification, real-time availability, safety reporting, and administrative moderation.',
+    version: '1.2.0',
+    description: 'Complete RESTful API for CareNest — powering parent bookings, caregiver verification, real-time availability, ratings & reviews, push notifications, safety blacklist reporting, and administrative moderation.',
     baseUrl: 'https://nodejsbabysitterbookingplatformbackend.onrender.com',
     authentication: {
         type: 'JWT (JSON Web Token)',
-        header: 'x-auth-token',
-        description: 'Include the signed JWT token returned from /api/user/login, /api/user/register, or /api/user/oauth in the x-auth-token HTTP header for all protected endpoints.',
-        example: 'x-auth-token: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
+        headers: ['Authorization: Bearer <token>', 'x-auth-token: <token>'],
+        description: 'Include the signed JWT token returned from /api/user/login, /api/user/register, /api/babysitter/register, or /api/user/oauth in either the "Authorization: Bearer <token>" or "x-auth-token: <token>" HTTP header for all protected endpoints. Note: Administrative accounts are strictly restricted to the web dashboard and cannot log into mobile clients (identified via "x-client-platform: mobile" header or "platform: mobile" body parameter).',
+        example: 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
     }
 };
 
@@ -21,24 +21,24 @@ const API_CATEGORIES = [
         id: 'auth-user',
         name: 'Authentication & User Management',
         basePath: '/api/user',
-        description: 'Registration, authentication, Google OAuth, session retrieval, password recovery, and credential updates.',
+        description: 'Registration, credential-based and Google OAuth authentication, session validation, password recovery, display name updates, and profile security.',
         endpoints: [
             {
                 method: 'POST',
                 path: '/api/user/register',
                 summary: 'Register Family / Regular Account',
-                description: 'Creates a new regular family user account and returns an authenticated session token.',
+                description: 'Creates a new regular family user account and returns an authenticated JWT session token.',
                 auth: 'Public',
                 headers: { 'Content-Type': 'application/json' },
                 body: {
                     username: { type: 'string', required: true, description: 'Unique username' },
-                    email: { type: 'string', required: true, description: 'Valid email address' },
+                    email: { type: 'string', required: true, description: 'Valid, unique email address' },
                     password: { type: 'string', required: true, description: 'Password (minimum 8 characters)' }
                 },
                 responses: [
-                    { status: 201, description: 'Account registered successfully', example: { token: 'jwt_token_string', user: { id: '64a...', role: 'user', isSuperUser: false } } },
-                    { status: 400, description: 'Validation error (missing fields or password too short)' },
-                    { status: 409, description: 'Username or email already in use' }
+                    { status: 201, description: 'Account registered successfully', example: { token: 'jwt_token_string', user: { id: '64a...', username: 'family1', email: 'family1@example.com', role: 'user', isSuperUser: false } } },
+                    { status: 400, description: 'Validation error (missing fields or password under 8 characters)' },
+                    { status: 409, description: 'Username or email is already registered to another account' }
                 ],
                 exampleCurl: `curl -X POST https://nodejsbabysitterbookingplatformbackend.onrender.com/api/user/register \\
   -H "Content-Type: application/json" \\
@@ -48,44 +48,79 @@ const API_CATEGORIES = [
                 method: 'POST',
                 path: '/api/user/login',
                 summary: 'Account Login',
-                description: 'Authenticate an existing user (family, caregiver, or administrator) using email/username and password.',
+                description: 'Authenticate an existing user (family, caregiver, or administrator) using email/username and password. Administrator logins from mobile clients (x-client-platform: mobile or platform: mobile) are strictly prohibited.',
                 auth: 'Public',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-client-platform': 'Optional ("mobile" or "web")'
+                },
                 body: {
-                    email: { type: 'string', required: 'Either email or username', description: 'Registered email address' },
-                    username: { type: 'string', required: 'Either email or username', description: 'Registered username' },
-                    password: { type: 'string', required: true, description: 'Account password' }
+                    identifier: { type: 'string', required: 'identifier, email, or username', description: 'Registered email address or username' },
+                    email: { type: 'string', required: 'identifier, email, or username', description: 'Registered email address' },
+                    username: { type: 'string', required: 'identifier, email, or username', description: 'Registered username' },
+                    password: { type: 'string', required: true, description: 'Account password' },
+                    platform: { type: 'string', required: false, description: 'Client platform indicator ("mobile" or "web")' }
                 },
                 responses: [
-                    { status: 200, description: 'Login successful', example: { token: 'jwt_token_string', user: { id: '64a...', role: 'user', isSuperUser: false } } },
-                    { status: 400, description: 'Missing credentials or invalid password' }
+                    { status: 200, description: 'Login successful', example: { token: 'jwt_token_string', user: { id: '64a...', username: 'caregiver1', email: 'caregiver1@example.com', role: 'babysitter', isSuperUser: false, name: 'Sara Ahmed', photoUrl: '/api/babysitter/photo/64b...' } } },
+                    { status: 400, description: 'Missing credentials or invalid password' },
+                    { status: 403, description: 'Admin accounts can only be accessed through the web admin dashboard' }
                 ],
                 exampleCurl: `curl -X POST https://nodejsbabysitterbookingplatformbackend.onrender.com/api/user/login \\
   -H "Content-Type: application/json" \\
-  -d '{"email":"family1@example.com","password":"Password123"}'`
+  -d '{"identifier":"family1@example.com","password":"Password123"}'`
             },
             {
                 method: 'GET',
                 path: '/api/user',
                 summary: 'Get Current Authenticated Account',
-                description: 'Retrieves profile and role details of the currently signed-in user.',
-                auth: 'Authenticated (Any Role)',
-                headers: { 'x-auth-token': '<jwt_token>' },
+                description: 'Retrieves current user identity, role, and profile details from the JWT session. Rejects mobile clients if the authenticated user is an administrator.',
+                auth: 'Authenticated (Bearer token or x-auth-token)',
+                headers: {
+                    'Authorization': 'Bearer <jwt_token>',
+                    'x-auth-token': '<jwt_token>',
+                    'x-client-platform': 'Optional ("mobile")'
+                },
                 responses: [
-                    { status: 200, description: 'Current user profile', example: { user: { id: '64a...', username: 'family1', email: 'family1@example.com', role: 'user', isSuperUser: false } } },
-                    { status: 401, description: 'Missing or expired x-auth-token' }
+                    { status: 200, description: 'Current user profile', example: { user: { id: '64a...', username: 'caregiver1', email: 'caregiver1@example.com', role: 'babysitter', isSuperUser: false, name: 'Sara Ahmed', photoUrl: '/api/babysitter/photo/64b...' } } },
+                    { status: 401, description: 'Missing or expired session token' },
+                    { status: 403, description: 'Admin accounts can only be accessed through the web admin dashboard' },
+                    { status: 404, description: 'User account no longer exists' }
                 ],
                 exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/user \\
-  -H "x-auth-token: YOUR_JWT_TOKEN"`
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"`
+            },
+            {
+                method: 'PATCH',
+                path: '/api/user/profile',
+                summary: 'Update User Profile Name',
+                description: 'Updates the display name of the authenticated user. If the account is a caregiver, synchronizes the name on the caregiver profile as well.',
+                auth: 'Authenticated (Any Role)',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer <jwt_token>'
+                },
+                body: {
+                    name: { type: 'string', required: true, description: 'Updated display name' }
+                },
+                responses: [
+                    { status: 200, description: 'Profile updated successfully', example: { msg: 'Profile updated successfully', user: { id: '64a...', name: 'Sara Mansour', username: 'sara_1234' } } },
+                    { status: 401, description: 'Unauthorized' },
+                    { status: 404, description: 'User not found' }
+                ],
+                exampleCurl: `curl -X PATCH https://nodejsbabysitterbookingplatformbackend.onrender.com/api/user/profile \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+  -d '{"name":"Sara Mansour"}'`
             },
             {
                 method: 'POST',
                 path: '/api/user/oauth/nonce',
                 summary: 'Generate Google Sign-In Nonce',
-                description: 'Issues a short-lived cryptographic nonce required for Google credential validation.',
+                description: 'Issues a short-lived cryptographic nonce required for Google ID token credential validation.',
                 auth: 'Public',
                 responses: [
-                    { status: 200, description: 'Nonce created', example: { nonce: 'abc123nonceString' } }
+                    { status: 200, description: 'Nonce generated', example: { nonce: 'abc123nonceString' } }
                 ],
                 exampleCurl: `curl -X POST https://nodejsbabysitterbookingplatformbackend.onrender.com/api/user/oauth/nonce`
             },
@@ -93,7 +128,7 @@ const API_CATEGORIES = [
                 method: 'POST',
                 path: '/api/user/oauth',
                 summary: 'Google OAuth Sign-In / Register',
-                description: 'Validates a Google ID token credential against a verified nonce and logs in or requests account type selection.',
+                description: 'Validates a Google ID token credential against a verified nonce. In registration flow, rejects accounts whose email is already registered with a 409 error.',
                 auth: 'Public',
                 headers: { 'Content-Type': 'application/json' },
                 body: {
@@ -102,27 +137,28 @@ const API_CATEGORIES = [
                     flow: { type: 'string', required: false, description: '"login" or "register"' }
                 },
                 responses: [
-                    { status: 200, description: 'Signed in, or pending registration required', example: { token: 'jwt...', user: { id: '64a...', role: 'user' } } },
-                    { status: 401, description: 'Invalid Google credential or expired nonce' }
+                    { status: 200, description: 'Signed in, or pending registration token returned', example: { token: 'jwt...', user: { id: '64a...', role: 'user' } } },
+                    { status: 401, description: 'Invalid Google credential or expired nonce' },
+                    { status: 409, description: 'An account with this email already exists. Please sign in instead.' }
                 ],
                 exampleCurl: `curl -X POST https://nodejsbabysitterbookingplatformbackend.onrender.com/api/user/oauth \\
   -H "Content-Type: application/json" \\
-  -d '{"credential":"google_jwt_token","nonce":"signed_nonce"}'`
+  -d '{"credential":"google_jwt_token","nonce":"signed_nonce","flow":"register"}'`
             },
             {
                 method: 'POST',
                 path: '/api/user/oauth/complete-registration',
                 summary: 'Complete Google Registration',
-                description: 'Finalizes Google account creation after the user selects their account role.',
+                description: 'Finalizes Google account creation after the user selects their account role ("user" for family or "babysitter" for caregiver).',
                 auth: 'Public',
                 headers: { 'Content-Type': 'application/json' },
                 body: {
-                    registrationToken: { type: 'string', required: true, description: 'Token from pending Google OAuth flow' },
+                    registrationToken: { type: 'string', required: true, description: 'Pending registration token from Google OAuth flow' },
                     role: { type: 'string', required: true, description: '"user" (family) or "babysitter" (caregiver)' }
                 },
                 responses: [
                     { status: 200, description: 'Account completed and session token returned', example: { token: 'jwt...', user: { id: '64a...', role: 'user' } } },
-                    { status: 400, description: 'Invalid role or missing token' }
+                    { status: 400, description: 'Invalid role or missing/expired registration token' }
                 ],
                 exampleCurl: `curl -X POST https://nodejsbabysitterbookingplatformbackend.onrender.com/api/user/oauth/complete-registration \\
   -H "Content-Type: application/json" \\
@@ -132,7 +168,7 @@ const API_CATEGORIES = [
                 method: 'POST',
                 path: '/api/user/forgot-password',
                 summary: 'Request Password Reset Link',
-                description: 'Sends a password recovery email containing a secure 15-minute token link.',
+                description: 'Sends a password recovery email containing a secure 15-minute token link pointing to https://dmansour2000.github.io/?token=...',
                 auth: 'Public',
                 headers: { 'Content-Type': 'application/json' },
                 body: {
@@ -151,7 +187,7 @@ const API_CATEGORIES = [
                 method: 'POST',
                 path: '/api/user/reset-password',
                 summary: 'Reset Password With Token',
-                description: 'Sets a new account password using the token received in the password reset email.',
+                description: 'Sets a new account password using the token received in the password reset email URL parameter.',
                 auth: 'Public',
                 headers: { 'Content-Type': 'application/json' },
                 body: {
@@ -160,7 +196,7 @@ const API_CATEGORIES = [
                 },
                 responses: [
                     { status: 200, description: 'Password reset successful', example: { msg: 'Password updated successfully' } },
-                    { status: 400, description: 'Invalid or expired token, or password too short' }
+                    { status: 400, description: 'Invalid or expired token, or password under 8 characters' }
                 ],
                 exampleCurl: `curl -X POST https://nodejsbabysitterbookingplatformbackend.onrender.com/api/user/reset-password \\
   -H "Content-Type: application/json" \\
@@ -172,18 +208,21 @@ const API_CATEGORIES = [
                 summary: 'Change Current Password',
                 description: 'Allows an authenticated user to update their password by confirming their current password.',
                 auth: 'Authenticated (Any Role)',
-                headers: { 'Content-Type': 'application/json', 'x-auth-token': '<jwt_token>' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer <jwt_token>'
+                },
                 body: {
                     currentPassword: { type: 'string', required: true, description: 'Existing account password' },
                     newPassword: { type: 'string', required: true, description: 'New password (minimum 8 characters)' }
                 },
                 responses: [
                     { status: 200, description: 'Password changed successfully', example: { msg: 'Password updated successfully' } },
-                    { status: 400, description: 'Incorrect current password or new password too short' }
+                    { status: 400, description: 'Incorrect current password or new password under 8 characters' }
                 ],
                 exampleCurl: `curl -X PATCH https://nodejsbabysitterbookingplatformbackend.onrender.com/api/user/password \\
   -H "Content-Type: application/json" \\
-  -H "x-auth-token: YOUR_JWT_TOKEN" \\
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
   -d '{"currentPassword":"OldPassword123","newPassword":"NewSecurePassword123"}'`
             },
             {
@@ -192,7 +231,10 @@ const API_CATEGORIES = [
                 summary: 'Change Current Email Address',
                 description: 'Updates the authenticated user’s email address upon password verification.',
                 auth: 'Authenticated (Any Role)',
-                headers: { 'Content-Type': 'application/json', 'x-auth-token': '<jwt_token>' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer <jwt_token>'
+                },
                 body: {
                     currentPassword: { type: 'string', required: true, description: 'Current password for identity confirmation' },
                     newEmail: { type: 'string', required: true, description: 'New unique email address' }
@@ -204,22 +246,22 @@ const API_CATEGORIES = [
                 ],
                 exampleCurl: `curl -X PATCH https://nodejsbabysitterbookingplatformbackend.onrender.com/api/user/email \\
   -H "Content-Type: application/json" \\
-  -H "x-auth-token: YOUR_JWT_TOKEN" \\
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
   -d '{"currentPassword":"Password123","newEmail":"newemail@example.com"}'`
             },
             {
                 method: 'GET',
                 path: '/api/user/users',
                 summary: 'Admin: List Users',
-                description: 'Lists all users for the admin panel. Superusers see all users including other admins; regular admins see non-admin users.',
+                description: 'Lists users for the admin panel. Superusers see all users including other admins; regular admins see non-admin users.',
                 auth: 'Admin Only',
-                headers: { 'x-auth-token': '<admin_jwt>' },
+                headers: { 'Authorization': 'Bearer <admin_jwt>' },
                 responses: [
                     { status: 200, description: 'List of users without password hashes', example: [{ _id: '64a...', username: 'family1', email: 'family1@example.com', role: 'user' }] },
                     { status: 403, description: 'Access denied (non-admin)' }
                 ],
                 exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/user/users \\
-  -H "x-auth-token: YOUR_ADMIN_JWT"`
+  -H "Authorization: Bearer YOUR_ADMIN_JWT"`
             },
             {
                 method: 'GET',
@@ -227,29 +269,29 @@ const API_CATEGORIES = [
                 summary: 'Admin: Get User by ID',
                 description: 'Fetches details of a specific user account.',
                 auth: 'Admin Only',
-                headers: { 'x-auth-token': '<admin_jwt>' },
+                headers: { 'Authorization': 'Bearer <admin_jwt>' },
                 params: { id: { type: 'string', required: true, description: 'User ID' } },
                 responses: [
                     { status: 200, description: 'User profile details', example: { _id: '64a...', username: 'family1', email: 'family1@example.com', role: 'user' } },
                     { status: 404, description: 'User not found' }
                 ],
                 exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/user/users/64a000000000000000000010 \\
-  -H "x-auth-token: YOUR_ADMIN_JWT"`
+  -H "Authorization: Bearer YOUR_ADMIN_JWT"`
             },
             {
                 method: 'DELETE',
                 path: '/api/user/users/:id',
                 summary: 'Admin: Delete User & Linked Records',
-                description: 'Deletes a user, associated caregiver profile, uploaded verification files, and booking appointments.',
+                description: 'Deletes a user, associated caregiver profile, uploaded verification files, and booking records.',
                 auth: 'Admin (Superuser required to delete another admin)',
-                headers: { 'x-auth-token': '<admin_jwt>' },
+                headers: { 'Authorization': 'Bearer <admin_jwt>' },
                 params: { id: { type: 'string', required: true, description: 'User ID to delete' } },
                 responses: [
                     { status: 200, description: 'User removed', example: { msg: 'User removed' } },
                     { status: 403, description: 'Only superuser can remove an admin, or caller is not admin' }
                 ],
                 exampleCurl: `curl -X DELETE https://nodejsbabysitterbookingplatformbackend.onrender.com/api/user/users/64a000000000000000000010 \\
-  -H "x-auth-token: YOUR_ADMIN_JWT"`
+  -H "Authorization: Bearer YOUR_ADMIN_JWT"`
             }
         ]
     },
@@ -257,143 +299,168 @@ const API_CATEGORIES = [
         id: 'babysitters',
         name: 'Caregivers & Babysitters',
         basePath: '/api/babysitter',
-        description: 'Caregiver directory search, profile registration with verification documents, availability status, and document viewing.',
+        description: 'Caregiver directory search, profile registration, verification document uploads, profile updates, star ratings & reviews, and real-time availability.',
         endpoints: [
             {
                 method: 'GET',
                 path: '/api/babysitter',
-                summary: 'Search & Filter Caregivers',
-                description: 'Public endpoint to discover available, approved caregivers. Never exposes private contact info or national ID cards.',
+                summary: 'Search & Filter Approved Caregivers',
+                description: 'Public endpoint to discover available, approved caregivers. Never exposes private contact info or national ID cards. Includes real-time booking availability and rating aggregation.',
                 auth: 'Public',
                 query: {
-                    search: { type: 'string', description: 'Filter by caregiver name, bio keywords, or city' },
-                    city: { type: 'string', description: 'Exact city match (e.g. Cairo, Alexandria, Giza, Mansoura, Tanta)' },
-                    service: { type: 'string', description: 'Required service: "babysitting", "childcare", "cleaning", "cooking"' },
-                    minSalary: { type: 'number', description: 'Minimum hourly rate' },
-                    maxSalary: { type: 'number', description: 'Maximum hourly rate' },
-                    page: { type: 'integer', description: 'Pagination page number (default: 1)' },
-                    limit: { type: 'integer', description: 'Results per page (default: 12)' }
+                    search: { type: 'string', description: 'Filter by caregiver name, bio keywords, or nationality' },
+                    service: { type: 'string', description: 'Filter by service: "cleaning", "babysitting", "cooking", "elderlyCare"' }
                 },
                 responses: [
-                    { status: 200, description: 'List of matching approved caregivers', example: [{ _id: '64a...', name: 'Sarah Ahmed', city: 'Cairo', bio: 'Certified pediatric caregiver...', hourlyRate: 150, currency: 'EGP', services: ['babysitting', 'childcare'], experience: 4, isAvailable: true, averageRating: 4.8, hasProfilePhoto: true }] }
+                    { status: 200, description: 'List of matching approved caregivers', example: [{ _id: '64a...', name: 'Sara Ahmed', city: 'Cairo', nationality: 'Egyptian', monthlySalary: 5000, currency: 'EGP', services: ['babysitting', 'cooking'], bio: 'Certified pediatric caregiver...', photoUrl: '/api/babysitter/photo/64a...', hasAcceptedBooking: false, isAvailable: true, available: true, averageRating: 4.9, ratingsCount: 12 }] }
                 ],
-                exampleCurl: `curl -X GET "https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter?city=Cairo&service=babysitting"`
+                exampleCurl: `curl -X GET "https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter?service=babysitting"`
             },
             {
                 method: 'POST',
                 path: '/api/babysitter/register',
-                summary: 'Register Caregiver Account With Verification',
-                description: 'Registers a new caregiver account with required ID proof and criminal record certificate for admin review.',
-                auth: 'Public (multipart/form-data)',
-                headers: { 'Content-Type': 'multipart/form-data' },
+                summary: 'Register Caregiver Account',
+                description: 'Creates a caregiver user account and linked babysitter profile in JSON format. Automatically generates a unique username if omitted and returns a signed session token. Account starts with moderationStatus "pending"/"unapproved".',
+                auth: 'Public',
+                headers: { 'Content-Type': 'application/json' },
                 body: {
                     name: { type: 'string', required: true, description: 'Full legal name' },
                     email: { type: 'string', required: true, description: 'Unique email address' },
-                    password: { type: 'string', required: true, description: 'Password (min 8 chars)' },
-                    phone: { type: 'string', required: true, description: 'Contact phone number' },
-                    nationalId: { type: 'string', required: true, description: 'National Identification Number' },
-                    age: { type: 'number', required: true, description: 'Age (must be 18 or older)' },
-                    experience: { type: 'number', required: true, description: 'Years of child care experience' },
-                    hourlyRate: { type: 'number', required: true, description: 'Requested hourly rate' },
-                    currency: { type: 'string', required: true, description: '"EGP", "USD", "EUR", "SAR", "AED"' },
-                    city: { type: 'string', required: true, description: 'Primary working city' },
-                    services: { type: 'string[]', required: true, description: 'JSON array or comma-separated services' },
-                    bio: { type: 'string', required: false, description: 'Personal introduction' },
-                    nationalIdCard: { type: 'file (image/pdf)', required: true, description: 'Identity document scan' },
-                    criminalRecord: { type: 'file (image/pdf)', required: true, description: 'Criminal background record' },
-                    profilePhoto: { type: 'file (image)', required: false, description: 'Public profile picture' }
+                    password: { type: 'string', required: true, description: 'Password (minimum 8 characters)' },
+                    username: { type: 'string', required: false, description: 'Optional custom username (auto-generated from name if omitted)' },
+                    phone: { type: 'string', required: false, description: 'Contact phone number' },
+                    age: { type: 'number', required: false, description: 'Caregiver age' },
+                    nationality: { type: 'string', required: false, description: 'Country of nationality (e.g. "Egyptian", "Filipino")' },
+                    services: { type: 'string[]', required: false, description: 'List of services: "cleaning", "babysitting", "cooking", "elderlyCare"' },
+                    city: { type: 'string', required: false, description: 'Primary working city/governorate' },
+                    bio: { type: 'string', required: false, description: 'Personal biography and background' },
+                    monthlySalary: { type: 'number', required: false, description: 'Expected monthly salary' },
+                    currency: { type: 'string', required: false, description: 'Salary currency ("EGP", "USD", default: "EGP")' }
                 },
                 responses: [
-                    { status: 201, description: 'Caregiver account created and submitted for moderation', example: { token: 'jwt...', user: { id: '64a...', role: 'babysitter' }, babysitter: { id: '64b...', isApproved: false } } }
+                    { status: 200, description: 'Caregiver account created and logged in', example: { token: 'jwt...', user: { id: '64a...', username: 'sara_4821', email: 'sara@example.com', role: 'babysitter', name: 'Sara Ahmed', photoUrl: null } } },
+                    { status: 400, description: 'Validation error (name, email, or password under 8 characters)' },
+                    { status: 409, description: 'Email is already registered to another account' }
                 ],
                 exampleCurl: `curl -X POST https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter/register \\
-  -F "name=Nour Ali" \\
-  -F "email=nour@example.com" \\
-  -F "password=Password123" \\
-  -F "phone=+201001234567" \\
-  -F "nationalId=29501011234567" \\
-  -F "age=26" \\
-  -F "experience=3" \\
-  -F "hourlyRate=120" \\
-  -F "currency=EGP" \\
-  -F "city=Cairo" \\
-  -F "services=babysitting,childcare" \\
-  -F "nationalIdCard=@/path/to/id.jpg" \\
-  -F "criminalRecord=@/path/to/record.pdf"`
+  -H "Content-Type: application/json" \\
+  -d '{"name":"Sara Ahmed","email":"sara@example.com","password":"Password123","nationality":"Egyptian","city":"Cairo","monthlySalary":6000,"currency":"EGP","services":["babysitting","cooking"]}'`
             },
             {
                 method: 'GET',
                 path: '/api/babysitter/profile',
                 summary: 'Get Own Caregiver Profile',
-                description: 'Retrieves the complete profile of the authenticated caregiver, including approval status and verification indicators.',
+                description: 'Retrieves the complete profile of the authenticated caregiver, including approval status, verification indicators, and document flags.',
                 auth: 'Authenticated (Caregiver)',
-                headers: { 'x-auth-token': '<jwt_token>' },
+                headers: { 'Authorization': 'Bearer <jwt_token>' },
                 responses: [
-                    { status: 200, description: 'Caregiver full profile', example: { profile: { id: '64b...', name: 'Nour Ali', isApproved: true, isAvailable: true, hourlyRate: 120, currency: 'EGP' } } }
+                    { status: 200, description: 'Caregiver full profile', example: { _id: '64b...', name: 'Sara Ahmed', moderationStatus: 'approved', available: true, monthlySalary: 6000, currency: 'EGP', nationality: 'Egyptian', photoUrl: '/api/babysitter/profile/photo', verificationDocuments: { photo: true, nationalId: true, passport: false, residency: false } } }
                 ],
                 exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter/profile \\
-  -H "x-auth-token: YOUR_CAREGIVER_JWT"`
+  -H "Authorization: Bearer YOUR_CAREGIVER_JWT"`
             },
             {
                 method: 'PUT',
                 path: '/api/babysitter/profile',
                 summary: 'Update Caregiver Profile',
-                description: 'Updates editable profile fields (hourly rate, bio, services, experience, city).',
+                description: 'Updates caregiver editable details including name, phone, age, nationality, nationalityType, city, bio, monthlySalary, currency, and services.',
                 auth: 'Authenticated (Caregiver)',
-                headers: { 'Content-Type': 'application/json', 'x-auth-token': '<jwt_token>' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer <jwt_token>'
+                },
                 body: {
-                    name: { type: 'string', required: false },
-                    bio: { type: 'string', required: false },
-                    experience: { type: 'number', required: false },
-                    hourlyRate: { type: 'number', required: false },
-                    currency: { type: 'string', required: false },
-                    city: { type: 'string', required: false },
-                    services: { type: 'string[]', required: false }
+                    name: { type: 'string', required: false, description: 'Full legal name (also updates user account)' },
+                    phone: { type: 'string', required: false, description: 'Phone number' },
+                    age: { type: 'number', required: false, description: 'Caregiver age' },
+                    nationality: { type: 'string', required: false, description: 'Nationality name' },
+                    nationalityType: { type: 'string', required: false, description: '"egyptian" or "other"' },
+                    city: { type: 'string', required: false, description: 'City/district' },
+                    bio: { type: 'string', required: false, description: 'Bio (max 1500 characters)' },
+                    monthlySalary: { type: 'number', required: false, description: 'Expected monthly salary' },
+                    currency: { type: 'string', required: false, description: '"EGP" or "USD"' },
+                    services: { type: 'string[]', required: false, description: 'Array of services ("cleaning", "babysitting", "cooking", "elderlyCare")' }
                 },
                 responses: [
-                    { status: 200, description: 'Profile updated', example: { msg: 'Profile updated successfully' } }
+                    { status: 200, description: 'Profile updated successfully', example: { msg: 'Profile updated successfully', babysitter: { _id: '64b...', monthlySalary: 7000, currency: 'EGP' } } },
+                    { status: 400, description: 'Validation error (unsupported currency, invalid salary, or unknown services)' }
                 ],
                 exampleCurl: `curl -X PUT https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter/profile \\
   -H "Content-Type: application/json" \\
-  -H "x-auth-token: YOUR_CAREGIVER_JWT" \\
-  -d '{"hourlyRate":140,"bio":"Updated bio with new certifications"}'`
+  -H "Authorization: Bearer YOUR_CAREGIVER_JWT" \\
+  -d '{"monthlySalary":7000,"currency":"EGP","nationality":"Egyptian","city":"Alexandria"}'`
             },
             {
                 method: 'PATCH',
                 path: '/api/babysitter/availability',
                 summary: 'Toggle Availability Status',
-                description: 'Instantly switches the caregiver profile between available (accepting new bookings) and unavailable.',
+                description: 'Instantly switches the caregiver profile between available (accepting new booking requests) and unavailable.',
                 auth: 'Authenticated (Caregiver)',
-                headers: { 'Content-Type': 'application/json', 'x-auth-token': '<jwt_token>' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer <jwt_token>'
+                },
                 body: {
-                    isAvailable: { type: 'boolean', required: true, description: 'True to accept bookings, false to pause' }
+                    available: { type: 'boolean', required: true, description: 'True to accept bookings, false to pause' }
                 },
                 responses: [
-                    { status: 200, description: 'Availability toggled', example: { isAvailable: false } }
+                    { status: 200, description: 'Availability toggled', example: { available: false, hasAcceptedBooking: false } }
                 ],
                 exampleCurl: `curl -X PATCH https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter/availability \\
   -H "Content-Type: application/json" \\
-  -H "x-auth-token: YOUR_CAREGIVER_JWT" \\
-  -d '{"isAvailable":true}'`
+  -H "Authorization: Bearer YOUR_CAREGIVER_JWT" \\
+  -d '{"available":true}'`
+            },
+            {
+                method: 'GET',
+                path: '/api/babysitter/profile/photo',
+                summary: 'Get Own Caregiver Photo',
+                description: 'Streams the profile image of the currently logged-in caregiver.',
+                auth: 'Authenticated (Caregiver)',
+                headers: { 'Authorization': 'Bearer <jwt_token>' },
+                responses: [
+                    { status: 200, description: 'Binary image stream' },
+                    { status: 404, description: 'No photo uploaded' }
+                ],
+                exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter/profile/photo \\
+  -H "Authorization: Bearer YOUR_CAREGIVER_JWT"`
+            },
+            {
+                method: 'GET',
+                path: '/api/babysitter/profile/documents/:kind',
+                summary: 'Get Own Verification Document',
+                description: 'Streams the caregiver’s own uploaded legal document ("nationalId", "passport", "residency", or document index 0 or 1).',
+                auth: 'Authenticated (Caregiver)',
+                headers: { 'Authorization': 'Bearer <jwt_token>' },
+                params: { kind: { type: 'string', required: true, description: '"nationalId", "passport", "residency", "0", or "1"' } },
+                responses: [
+                    { status: 200, description: 'Binary file stream' },
+                    { status: 404, description: 'Document not found' }
+                ],
+                exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter/profile/documents/nationalId \\
+  -H "Authorization: Bearer YOUR_CAREGIVER_JWT"`
             },
             {
                 method: 'POST',
                 path: '/api/babysitter/profile/documents',
-                summary: 'Upload/Update Verification Documents',
-                description: 'Uploads or replaces ID card, criminal record, or profile photo for verification.',
+                summary: 'Upload Verification Documents',
+                description: 'Uploads verification documents and/or profile photo in multipart/form-data. Resets profile moderationStatus to "pending" for admin review.',
                 auth: 'Authenticated (Caregiver, multipart/form-data)',
-                headers: { 'x-auth-token': '<jwt_token>' },
+                headers: { 'Authorization': 'Bearer <jwt_token>' },
                 body: {
-                    profilePhoto: { type: 'file (image)', required: false },
-                    nationalIdCard: { type: 'file (image/pdf)', required: false },
-                    criminalRecord: { type: 'file (image/pdf)', required: false }
+                    photo: { type: 'file (image)', required: false, description: 'Profile picture (JPG, PNG, WebP)' },
+                    nationalId: { type: 'file (image/pdf)', required: false, description: 'National ID card' },
+                    passport: { type: 'file (image/pdf)', required: false, description: 'Passport document' },
+                    residency: { type: 'file (image/pdf)', required: false, description: 'Residency visa / permit' },
+                    documents: { type: 'file[] (up to 2)', required: false, description: 'Generic verification documents / certificates' }
                 },
                 responses: [
-                    { status: 200, description: 'Documents uploaded successfully' }
+                    { status: 200, description: 'Documents uploaded and submitted for moderation', example: { msg: 'Documents uploaded for review', moderationStatus: 'pending', photoUrl: '/api/babysitter/profile/photo', documentsCount: 2 } }
                 ],
                 exampleCurl: `curl -X POST https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter/profile/documents \\
-  -H "x-auth-token: YOUR_CAREGIVER_JWT" \\
-  -F "profilePhoto=@/path/to/new-photo.jpg"`
+  -H "Authorization: Bearer YOUR_CAREGIVER_JWT" \\
+  -F "photo=@/path/to/photo.jpg" \\
+  -F "nationalId=@/path/to/id.jpg"`
             },
             {
                 method: 'GET',
@@ -411,31 +478,68 @@ const API_CATEGORIES = [
             {
                 method: 'GET',
                 path: '/api/babysitter/users/:id',
-                summary: 'Get Caregiver Details by ID',
-                description: 'Retrieves public caregiver profile. Private contact details are included only if the caller has an active confirmed booking with them.',
-                auth: 'Authenticated (Any Role)',
-                headers: { 'x-auth-token': '<jwt_token>' },
-                params: { id: { type: 'string', required: true, description: 'Caregiver profile ID' } },
+                summary: 'Get Caregiver Public Details & Reviews',
+                description: 'Retrieves public caregiver profile details, star rating aggregation, and recent customer reviews.',
+                auth: 'Public',
+                params: { id: { type: 'string', required: true, description: 'Caregiver profile ID or linked User ID' } },
                 responses: [
-                    { status: 200, description: 'Caregiver profile details', example: { babysitter: { _id: '64a...', name: 'Sarah Ahmed', city: 'Cairo', bio: '...' } } },
+                    { status: 200, description: 'Caregiver profile with rating stats and reviews', example: { _id: '64a...', name: 'Sara Ahmed', city: 'Cairo', monthlySalary: 6000, currency: 'EGP', averageRating: 4.8, ratingsCount: 15, reviews: [{ rating: 5, title: 'Excellent caregiver!', description: 'Very attentive with our daughter.' }] } },
                     { status: 404, description: 'Caregiver not found or unapproved' }
                 ],
-                exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter/users/64a000000000000000000012 \\
-  -H "x-auth-token: YOUR_JWT_TOKEN"`
+                exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter/users/64a000000000000000000012`
+            },
+            {
+                method: 'POST',
+                path: '/api/babysitter/:id/reviews',
+                summary: 'Submit Rating & Review',
+                description: 'Allows a verified family account to leave a 1-to-5 star rating and review for a caregiver. Dispatches a real-time push notification to the caregiver.',
+                auth: 'Authenticated (Family / Regular User Only)',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer <jwt_token>'
+                },
+                params: { id: { type: 'string', required: true, description: 'Caregiver Profile ID' } },
+                body: {
+                    rating: { type: 'integer (1-5)', required: true, description: 'Star rating from 1 to 5' },
+                    title: { type: 'string', required: true, description: 'Review summary title (max 120 chars)' },
+                    description: { type: 'string', required: true, description: 'Detailed review feedback (max 1000 chars)' }
+                },
+                responses: [
+                    { status: 201, description: 'Review submitted successfully', example: { msg: 'Review submitted successfully', review: { rating: 5, title: 'Punctual and kind' }, stats: { averageRating: 4.9, ratingsCount: 16 } } },
+                    { status: 400, description: 'Invalid rating number or missing fields / self-review attempt' },
+                    { status: 403, description: 'Only registered family accounts can submit ratings and reviews' },
+                    { status: 404, description: 'Caregiver profile not found' }
+                ],
+                exampleCurl: `curl -X POST https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter/64a000000000000000000012/reviews \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer YOUR_FAMILY_JWT" \\
+  -d '{"rating":5,"title":"Wonderful care!","description":"Our toddler loved spending time with Sara. Very responsible."}'`
+            },
+            {
+                method: 'GET',
+                path: '/api/babysitter/:id/reviews',
+                summary: 'Get Caregiver Reviews',
+                description: 'Public endpoint to view up to 50 reviews, average rating, and ratings count for a specific caregiver.',
+                auth: 'Public',
+                params: { id: { type: 'string', required: true, description: 'Caregiver Profile ID' } },
+                responses: [
+                    { status: 200, description: 'List of reviews with rating summary', example: { reviews: [{ _id: '...', rating: 5, title: 'Great experience', userName: 'Dina' }], averageRating: 4.8, ratingsCount: 12 } }
+                ],
+                exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter/64a000000000000000000012/reviews`
             },
             {
                 method: 'PUT',
                 path: '/api/babysitter/accept/:id',
-                summary: 'Accept Booking Request',
-                description: 'Allows a caregiver to accept an assigned booking request.',
+                summary: 'Accept Work Request (Caregiver)',
+                description: 'Allows a caregiver to mark their profile as busy upon taking an assignment.',
                 auth: 'Authenticated (Caregiver)',
-                headers: { 'x-auth-token': '<jwt_token>' },
-                params: { id: { type: 'string', required: true, description: 'Booking ID' } },
+                headers: { 'Authorization': 'Bearer <jwt_token>' },
+                params: { id: { type: 'string', required: true, description: 'Caregiver Profile ID' } },
                 responses: [
-                    { status: 200, description: 'Booking confirmed', example: { msg: 'Booking accepted successfully', booking: { id: '64c...', status: 'confirmed' } } }
+                    { status: 200, description: 'Profile availability set to busy', example: { _id: '64b...', available: false } }
                 ],
-                exampleCurl: `curl -X PUT https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter/accept/64c000000000000000000020 \\
-  -H "x-auth-token: YOUR_CAREGIVER_JWT"`
+                exampleCurl: `curl -X PUT https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter/accept/64b000000000000000000012 \\
+  -H "Authorization: Bearer YOUR_CAREGIVER_JWT"`
             }
         ]
     },
@@ -443,81 +547,87 @@ const API_CATEGORIES = [
         id: 'bookings',
         name: 'Bookings & Scheduling',
         basePath: '/api/bookings',
-        description: 'Create appointments, view booking histories, update status (confirm, complete, cancel), and manage sessions.',
+        description: 'Create care requests, view booking histories, update lifecycle status ("pending", "accepted", "declined", "cancelled"), and manage active sessions.',
         endpoints: [
             {
                 method: 'GET',
                 path: '/api/bookings',
                 summary: 'List Account Bookings',
-                description: 'Returns all bookings for the authenticated user. Families see bookings they initiated; caregivers see requests assigned to them.',
+                description: 'Returns all bookings for the authenticated user. Families see bookings they requested; caregivers see bookings assigned to them. Includes counterpart contact and photo information.',
                 auth: 'Authenticated (Family or Caregiver)',
-                headers: { 'x-auth-token': '<jwt_token>' },
-                query: {
-                    status: { type: 'string', required: false, description: 'Filter by "pending", "confirmed", "completed", "cancelled"' }
-                },
+                headers: { 'Authorization': 'Bearer <jwt_token>' },
                 responses: [
-                    { status: 200, description: 'List of booking records', example: [{ _id: '64c...', startTime: '2026-11-01T14:00:00Z', endTime: '2026-11-01T18:00:00Z', service: 'babysitting', status: 'confirmed', totalCost: 600, address: '5 El-Gezira St, Zamalek' }] }
+                    { status: 200, description: 'List of booking records', example: [{ _id: '64c...', startAt: '2026-11-01T00:00:00.000Z', endAt: '2026-11-05T23:59:59.999Z', service: 'babysitting', status: 'accepted', childrenCount: 2, babysitterId: { name: 'Sara Ahmed', phone: '+20100...', photoUrl: '/api/babysitter/photo/64b...' } }] }
                 ],
                 exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/bookings \\
-  -H "x-auth-token: YOUR_JWT_TOKEN"`
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"`
             },
             {
                 method: 'POST',
                 path: '/api/bookings',
-                summary: 'Create New Booking',
-                description: 'Schedules a booking request with a specified caregiver.',
+                summary: 'Create New Booking Request',
+                description: 'Creates a booking request with a specified caregiver for a future date range. Dispatches a push notification to the caregiver.',
                 auth: 'Authenticated (Family / Regular User Only)',
-                headers: { 'Content-Type': 'application/json', 'x-auth-token': '<jwt_token>' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer <jwt_token>'
+                },
                 body: {
-                    babysitterId: { type: 'string', required: true, description: 'Caregiver profile ID' },
-                    startTime: { type: 'string (ISO 8601)', required: true, description: 'Session start timestamp' },
-                    endTime: { type: 'string (ISO 8601)', required: true, description: 'Session end timestamp' },
-                    service: { type: 'string', required: true, description: '"babysitting", "childcare", "cleaning", "cooking"' },
-                    address: { type: 'string', required: true, description: 'Physical service location' },
-                    notes: { type: 'string', required: false, description: 'Instructions, child ages, or dietary notes' }
+                    babysitterId: { type: 'string', required: true, description: 'Caregiver profile ObjectId' },
+                    service: { type: 'string', required: true, description: '"cleaning", "babysitting", "cooking", "elderlyCare"' },
+                    startAt: { type: 'string (YYYY-MM-DD)', required: true, description: 'Future start date' },
+                    endAt: { type: 'string (YYYY-MM-DD)', required: true, description: 'End date (on or after start date)' },
+                    childrenCount: { type: 'integer (1-10)', required: true, description: 'Number of children (1 to 10)' },
+                    notes: { type: 'string', required: false, description: 'Special instructions or notes (max 1000 chars)' }
                 },
                 responses: [
-                    { status: 201, description: 'Booking created', example: { msg: 'Booking created successfully', booking: { _id: '64c...', status: 'pending' } } },
-                    { status: 400, description: 'Validation error (invalid times or unsupported service)' }
+                    { status: 201, description: 'Booking created successfully', example: { _id: '64c...', status: 'pending', service: 'babysitting' } },
+                    { status: 400, description: 'Validation error (past date, end before start, or invalid service)' },
+                    { status: 403, description: 'Only parent accounts can request a booking' }
                 ],
                 exampleCurl: `curl -X POST https://nodejsbabysitterbookingplatformbackend.onrender.com/api/bookings \\
   -H "Content-Type: application/json" \\
-  -H "x-auth-token: YOUR_FAMILY_JWT" \\
-  -d '{"babysitterId":"64a000000000000000000012","startTime":"2026-11-01T14:00:00Z","endTime":"2026-11-01T18:00:00Z","service":"babysitting","address":"Zamalek, Cairo"}'`
+  -H "Authorization: Bearer YOUR_FAMILY_JWT" \\
+  -d '{"babysitterId":"64a000000000000000000012","service":"babysitting","startAt":"2026-11-10","endAt":"2026-11-12","childrenCount":1,"notes":"Evening babysitting."}'`
             },
             {
                 method: 'PATCH',
                 path: '/api/bookings/:id/status',
                 summary: 'Update Booking Status',
-                description: 'Transitions booking lifecycle state (confirm, complete, or cancel with optional reason).',
+                description: 'Transitions booking lifecycle state: "accepted", "declined", "cancelled", or "pending". Families can cancel or reactivate; caregivers can accept or decline. Dispatches push notifications and updates caregiver availability.',
                 auth: 'Authenticated (Family or Caregiver involved in booking)',
-                headers: { 'Content-Type': 'application/json', 'x-auth-token': '<jwt_token>' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer <jwt_token>'
+                },
                 params: { id: { type: 'string', required: true, description: 'Booking ID' } },
                 body: {
-                    status: { type: 'string', required: true, description: '"confirmed", "completed", "cancelled"' },
-                    cancellationReason: { type: 'string', required: false, description: 'Required when status is "cancelled"' }
+                    status: { type: 'string', required: true, description: '"accepted", "declined", "cancelled", or "pending"' }
                 },
                 responses: [
-                    { status: 200, description: 'Status updated', example: { msg: 'Status updated successfully', booking: { _id: '64c...', status: 'cancelled' } } }
+                    { status: 200, description: 'Status updated successfully', example: { _id: '64c...', status: 'accepted' } },
+                    { status: 400, description: 'Unsupported booking status' },
+                    { status: 403, description: 'Unauthorized to change this booking' },
+                    { status: 409, description: 'State conflict (e.g. conflicting active booking or expired date)' }
                 ],
                 exampleCurl: `curl -X PATCH https://nodejsbabysitterbookingplatformbackend.onrender.com/api/bookings/64c000000000000000000020/status \\
   -H "Content-Type: application/json" \\
-  -H "x-auth-token: YOUR_JWT_TOKEN" \\
-  -d '{"status":"cancelled","cancellationReason":"Schedule conflict"}'`
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+  -d '{"status":"accepted"}'`
             },
             {
                 method: 'DELETE',
                 path: '/api/bookings/:id',
                 summary: 'Cancel Booking',
-                description: 'Cancels an existing booking while preserving the audit record.',
-                auth: 'Authenticated (Participant User or Admin)',
-                headers: { 'x-auth-token': '<jwt_token>' },
+                description: 'Cancels an existing booking while preserving the booking record.',
+                auth: 'Authenticated (Family or Caregiver involved in booking)',
+                headers: { 'Authorization': 'Bearer <jwt_token>' },
                 params: { id: { type: 'string', required: true, description: 'Booking ID' } },
                 responses: [
-                    { status: 200, description: 'Booking cancelled', example: { msg: 'Booking cancelled successfully' } }
+                    { status: 200, description: 'Booking cancelled successfully', example: { msg: 'Booking cancelled successfully' } }
                 ],
                 exampleCurl: `curl -X DELETE https://nodejsbabysitterbookingplatformbackend.onrender.com/api/bookings/64c000000000000000000020 \\
-  -H "x-auth-token: YOUR_JWT_TOKEN"`
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"`
             }
         ]
     },
@@ -531,13 +641,13 @@ const API_CATEGORIES = [
                 method: 'GET',
                 path: '/api/blacklist',
                 summary: 'List Public Approved Safety Warnings',
-                description: 'Retrieves publicly approved incident warnings. Protects the submitter identity and omits private legal files.',
+                description: 'Retrieves publicly approved incident warnings. Protects submitter identity and omits private legal files.',
                 auth: 'Public',
                 query: {
                     search: { type: 'string', required: false, description: 'Search by reported person name, phone, or ID' }
                 },
                 responses: [
-                    { status: 200, description: 'Approved warnings', example: [{ _id: '64d...', name: 'Reported Caregiver', incidentDescription: 'Brief description...', incidentDate: '2026-09-15', hasPhoto: true }] }
+                    { status: 200, description: 'Approved warnings', example: [{ _id: '64d...', name: 'Reported Individual', incidentDescription: 'Brief description...', incidentDate: '2026-09-15', hasPhoto: true }] }
                 ],
                 exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/blacklist`
             },
@@ -545,14 +655,14 @@ const API_CATEGORIES = [
                 method: 'GET',
                 path: '/api/blacklist/mine',
                 summary: 'List User Submitted Reports',
-                description: 'Returns reports submitted by the logged-in family user with current moderation status.',
+                description: 'Returns reports submitted by the logged-in family user along with current moderation status.',
                 auth: 'Authenticated (Regular Family User)',
-                headers: { 'x-auth-token': '<jwt_token>' },
+                headers: { 'Authorization': 'Bearer <jwt_token>' },
                 responses: [
-                    { status: 200, description: 'User submissions', example: [{ _id: '64d...', name: 'Reported Person', status: 'pending', incidentDate: '2026-09-15' }] }
+                    { status: 200, description: 'User submissions', example: [{ _id: '64d...', name: 'Reported Individual', status: 'pending', incidentDate: '2026-09-15' }] }
                 ],
                 exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/blacklist/mine \\
-  -H "x-auth-token: YOUR_FAMILY_JWT"`
+  -H "Authorization: Bearer YOUR_FAMILY_JWT"`
             },
             {
                 method: 'POST',
@@ -560,31 +670,31 @@ const API_CATEGORIES = [
                 summary: 'Submit Incident Report',
                 description: 'Files a safety misconduct report with incident details and optional proof documents for admin review.',
                 auth: 'Authenticated (Regular Family User, multipart/form-data)',
-                headers: { 'x-auth-token': '<jwt_token>' },
+                headers: { 'Authorization': 'Bearer <jwt_token>' },
                 body: {
                     name: { type: 'string', required: true, description: 'Reported person name' },
                     nationalId: { type: 'string', required: true, description: 'National ID number' },
                     incidentDescription: { type: 'string', required: true, description: 'Detailed factual description of incident' },
                     incidentDate: { type: 'string (YYYY-MM-DD)', required: true, description: 'Date incident occurred' },
-                    phone: { type: 'string', required: false, description: 'Phone number' },
+                    phone: { type: 'string', required: false, description: 'Contact phone number' },
                     photo: { type: 'file (image)', required: false, description: 'Photograph of reported person' },
-                    documents: { type: 'file[] (up to 5)', required: false, description: 'Evidence files (police reports, messages, receipts)' }
+                    documents: { type: 'file[] (up to 5)', required: false, description: 'Evidence files (police complaints, messages, receipts)' }
                 },
                 responses: [
                     { status: 201, description: 'Report submitted and queued for review', example: { msg: 'Report submitted successfully and is pending administrative review', report: { _id: '64d...', status: 'pending' } } }
                 ],
                 exampleCurl: `curl -X POST https://nodejsbabysitterbookingplatformbackend.onrender.com/api/blacklist \\
-  -H "x-auth-token: YOUR_FAMILY_JWT" \\
+  -H "Authorization: Bearer YOUR_FAMILY_JWT" \\
   -F "name=Jane Doe" \\
   -F "nationalId=29001011234567" \\
-  -F "incidentDescription=Caregiver abandoned child unattended for 3 hours." \\
+  -F "incidentDescription=Caregiver abandoned child unattended." \\
   -F "incidentDate=2026-10-01"`
             },
             {
                 method: 'GET',
                 path: '/api/blacklist/:id/photo',
                 summary: 'View Approved Report Photo',
-                description: 'Public endpoint to view the photo attached to an approved warning.',
+                description: 'Public endpoint to view the photo attached to an approved safety warning.',
                 auth: 'Public',
                 params: { id: { type: 'string', required: true, description: 'Report ID' } },
                 responses: [
@@ -599,54 +709,72 @@ const API_CATEGORIES = [
                 summary: 'Admin: List Pending Reports',
                 description: 'Retrieves all submitted safety reports awaiting administrator approval.',
                 auth: 'Admin Only',
-                headers: { 'x-auth-token': '<admin_jwt>' },
+                headers: { 'Authorization': 'Bearer <admin_jwt>' },
                 responses: [
                     { status: 200, description: 'Pending reports list', example: [{ _id: '64d...', name: 'Jane Doe', nationalId: '2900...', status: 'pending', submitter: { id: '...', username: '...' } }] }
                 ],
                 exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/blacklist/admin/review \\
-  -H "x-auth-token: YOUR_ADMIN_JWT"`
+  -H "Authorization: Bearer YOUR_ADMIN_JWT"`
             },
             {
                 method: 'PATCH',
                 path: '/api/blacklist/admin/:id/review',
                 summary: 'Admin: Approve / Reject Report',
-                description: 'Updates a report status to approved (making it public) or rejected with internal notes.',
+                description: 'Updates a report status to "approved" (making it publicly visible) or "rejected" with review notes.',
                 auth: 'Admin Only',
-                headers: { 'Content-Type': 'application/json', 'x-auth-token': '<admin_jwt>' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer <admin_jwt>'
+                },
                 params: { id: { type: 'string', required: true, description: 'Report ID' } },
                 body: {
                     status: { type: 'string', required: true, description: '"approved" or "rejected"' },
-                    reviewNotes: { type: 'string', required: false, description: 'Administrative justification notes' }
+                    reviewNotes: { type: 'string', required: false, description: 'Administrative verification notes' }
                 },
                 responses: [
                     { status: 200, description: 'Review status saved', example: { msg: 'Report status updated', report: { _id: '64d...', status: 'approved' } } }
                 ],
                 exampleCurl: `curl -X PATCH https://nodejsbabysitterbookingplatformbackend.onrender.com/api/blacklist/admin/64d000000000000000000030/review \\
   -H "Content-Type: application/json" \\
-  -H "x-auth-token: YOUR_ADMIN_JWT" \\
-  -d '{"status":"approved","reviewNotes":"Police report verified"}'`
+  -H "Authorization: Bearer YOUR_ADMIN_JWT" \\
+  -d '{"status":"approved","reviewNotes":"Police complaint verified"}'`
             },
             {
                 method: 'DELETE',
                 path: '/api/blacklist/admin/:id',
                 summary: 'Admin: Delete Report',
-                description: 'Permanently deletes an incident report and purges all attached evidence files.',
+                description: 'Permanently deletes an incident report and cleans up all attached evidence files.',
                 auth: 'Admin Only',
-                headers: { 'x-auth-token': '<admin_jwt>' },
+                headers: { 'Authorization': 'Bearer <admin_jwt>' },
                 params: { id: { type: 'string', required: true, description: 'Report ID' } },
                 responses: [
                     { status: 200, description: 'Report deleted', example: { msg: 'Report deleted successfully' } }
                 ],
                 exampleCurl: `curl -X DELETE https://nodejsbabysitterbookingplatformbackend.onrender.com/api/blacklist/admin/64d000000000000000000030 \\
-  -H "x-auth-token: YOUR_ADMIN_JWT"`
+  -H "Authorization: Bearer YOUR_ADMIN_JWT"`
+            },
+            {
+                method: 'GET',
+                path: '/api/blacklist/admin/:id/photo',
+                summary: 'Admin: View Report Photo',
+                description: 'Admin endpoint to view the photo attached to any submitted report during review.',
+                auth: 'Admin Only',
+                headers: { 'Authorization': 'Bearer <admin_jwt>' },
+                params: { id: { type: 'string', required: true, description: 'Report ID' } },
+                responses: [
+                    { status: 200, description: 'Binary image stream' },
+                    { status: 404, description: 'Photo not found' }
+                ],
+                exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/blacklist/admin/64d000000000000000000030/photo \\
+  -H "Authorization: Bearer YOUR_ADMIN_JWT"`
             },
             {
                 method: 'GET',
                 path: '/api/blacklist/admin/:id/documents/:index',
-                summary: 'Admin: View Report Evidence Document',
-                description: 'Streams the uploaded evidence document (police complaint, photo, etc.) for administrative verification.',
+                summary: 'Admin: View Evidence Document',
+                description: 'Streams the uploaded evidence file (police report, photo, etc.) for administrative verification.',
                 auth: 'Admin Only',
-                headers: { 'x-auth-token': '<admin_jwt>' },
+                headers: { 'Authorization': 'Bearer <admin_jwt>' },
                 params: {
                     id: { type: 'string', required: true, description: 'Report ID' },
                     index: { type: 'integer', required: true, description: '0-based index of document' }
@@ -655,7 +783,7 @@ const API_CATEGORIES = [
                     { status: 200, description: 'Binary file stream' }
                 ],
                 exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/blacklist/admin/64d000000000000000000030/documents/0 \\
-  -H "x-auth-token: YOUR_ADMIN_JWT"`
+  -H "Authorization: Bearer YOUR_ADMIN_JWT"`
             }
         ]
     },
@@ -663,7 +791,7 @@ const API_CATEGORIES = [
         id: 'admin',
         name: 'Platform Administration & Moderation',
         basePath: '/api/admin',
-        description: 'Comprehensive administrative oversight: user management, caregiver document verification, account deletion, and platform analytics.',
+        description: 'Comprehensive administrative oversight: user management, caregiver document verification, moderation approval, account deletion, and platform dossiers.',
         endpoints: [
             {
                 method: 'GET',
@@ -671,7 +799,7 @@ const API_CATEGORIES = [
                 summary: 'List All Registered Users',
                 description: 'Administrative listing of all users across regular, caregiver, and admin roles with search and pagination.',
                 auth: 'Admin Only',
-                headers: { 'x-auth-token': '<admin_jwt>' },
+                headers: { 'Authorization': 'Bearer <admin_jwt>' },
                 query: {
                     role: { type: 'string', required: false, description: 'Filter by "user", "babysitter", "admin"' },
                     search: { type: 'string', required: false, description: 'Search by username or email' },
@@ -682,73 +810,72 @@ const API_CATEGORIES = [
                     { status: 200, description: 'User accounts list', example: [{ _id: '64a...', username: 'family1', email: 'family1@example.com', role: 'user', isSuperUser: false, createdAt: '2026-10-01' }] }
                 ],
                 exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/admin/users \\
-  -H "x-auth-token: YOUR_ADMIN_JWT"`
+  -H "Authorization: Bearer YOUR_ADMIN_JWT"`
             },
             {
                 method: 'GET',
                 path: '/api/admin/users/:id/details',
                 summary: 'Get Detailed Account Dossier',
-                description: 'Returns deep profile data for a specific user, including associated bookings, caregiver profiles, and moderation flags.',
+                description: 'Returns deep account data for a specific user, including associated bookings, caregiver profiles, and document verification flags.',
                 auth: 'Admin Only',
-                headers: { 'x-auth-token': '<admin_jwt>' },
+                headers: { 'Authorization': 'Bearer <admin_jwt>' },
                 params: { id: { type: 'string', required: true, description: 'User ID' } },
                 responses: [
-                    { status: 200, description: 'Comprehensive account details', example: { user: { _id: '64a...', username: 'family1' }, bookings: [{ _id: '64c...', status: 'confirmed' }] } }
+                    { status: 200, description: 'Comprehensive account details', example: { user: { _id: '64a...', username: 'family1' }, bookings: [{ _id: '64c...', status: 'accepted' }] } }
                 ],
                 exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/admin/users/64a000000000000000000010/details \\
-  -H "x-auth-token: YOUR_ADMIN_JWT"`
+  -H "Authorization: Bearer YOUR_ADMIN_JWT"`
             },
             {
                 method: 'DELETE',
                 path: '/api/admin/users/:id',
                 summary: 'Superadmin: Delete User Account',
-                description: 'Permanently deletes a user account and associated profile records. Restricted to the superadmin.',
+                description: 'Permanently deletes a user account and associated profile records. Restricted to superadmin.',
                 auth: 'Superadmin Only',
-                headers: { 'x-auth-token': '<superadmin_jwt>' },
+                headers: { 'Authorization': 'Bearer <superadmin_jwt>' },
                 params: { id: { type: 'string', required: true, description: 'User ID' } },
                 responses: [
                     { status: 200, description: 'Account deleted', example: { msg: 'User account deleted successfully' } },
                     { status: 403, description: 'Forbidden (regular admins cannot delete accounts)' }
                 ],
                 exampleCurl: `curl -X DELETE https://nodejsbabysitterbookingplatformbackend.onrender.com/api/admin/users/64a000000000000000000010 \\
-  -H "x-auth-token: YOUR_SUPERADMIN_JWT"`
+  -H "Authorization: Bearer YOUR_SUPERADMIN_JWT"`
             },
             {
                 method: 'GET',
                 path: '/api/admin/babysitters',
                 summary: 'List Caregivers For Moderation',
-                description: 'Lists all registered caregivers with verification status and indicators for attached legal documents.',
+                description: 'Lists all registered caregivers with verification status and flags for attached legal documents (photo, nationalId, passport, residency).',
                 auth: 'Admin Only',
-                headers: { 'x-auth-token': '<admin_jwt>' },
-                query: {
-                    status: { type: 'string', required: false, description: '"pending", "approved", or "rejected"' },
-                    search: { type: 'string', required: false, description: 'Search by caregiver name, city, or email' }
-                },
+                headers: { 'Authorization': 'Bearer <admin_jwt>' },
                 responses: [
-                    { status: 200, description: 'Caregiver moderation list', example: [{ _id: '64b...', name: 'Sarah Ahmed', city: 'Cairo', isApproved: false, documents: { nationalIdCard: true, criminalRecord: true } }] }
+                    { status: 200, description: 'Caregiver moderation list', example: [{ _id: '64b...', name: 'Sara Ahmed', moderationStatus: 'pending', verificationDocuments: { photo: true, nationalId: true, passport: false, residency: false } }] }
                 ],
-                exampleCurl: `curl -X GET "https://nodejsbabysitterbookingplatformbackend.onrender.com/api/admin/babysitters?status=pending" \\
-  -H "x-auth-token: YOUR_ADMIN_JWT"`
+                exampleCurl: `curl -X GET "https://nodejsbabysitterbookingplatformbackend.onrender.com/api/admin/babysitters" \\
+  -H "Authorization: Bearer YOUR_ADMIN_JWT"`
             },
             {
                 method: 'PATCH',
                 path: '/api/admin/babysitters/:id/moderation',
                 summary: 'Moderate Caregiver Profile',
-                description: 'Approve or reject a caregiver profile, enabling them to appear in public searches and accept bookings.',
+                description: 'Updates a caregiver profile status to "approved", "unapproved", or "blacklisted". Requires required identity documents before approval.',
                 auth: 'Admin Only',
-                headers: { 'Content-Type': 'application/json', 'x-auth-token': '<admin_jwt>' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer <admin_jwt>'
+                },
                 params: { id: { type: 'string', required: true, description: 'Caregiver Profile ID' } },
                 body: {
-                    isApproved: { type: 'boolean', required: true, description: 'True to approve, false to reject' },
-                    notes: { type: 'string', required: false, description: 'Moderator notes or rejection reason' }
+                    status: { type: 'string', required: true, description: '"approved", "unapproved", or "blacklisted"' }
                 },
                 responses: [
-                    { status: 200, description: 'Moderation status updated', example: { msg: 'Caregiver moderation status updated', babysitter: { _id: '64b...', isApproved: true } } }
+                    { status: 200, description: 'Moderation status updated', example: { msg: 'Moderation status updated', moderationStatus: 'approved' } },
+                    { status: 400, description: 'Missing required national ID or documents before approval' }
                 ],
                 exampleCurl: `curl -X PATCH https://nodejsbabysitterbookingplatformbackend.onrender.com/api/admin/babysitters/64b000000000000000000012/moderation \\
   -H "Content-Type: application/json" \\
-  -H "x-auth-token: YOUR_ADMIN_JWT" \\
-  -d '{"isApproved":true,"notes":"Verified against official records"}'`
+  -H "Authorization: Bearer YOUR_ADMIN_JWT" \\
+  -d '{"status":"approved"}'`
             },
             {
                 method: 'DELETE',
@@ -756,31 +883,32 @@ const API_CATEGORIES = [
                 summary: 'Superadmin: Delete Caregiver Profile',
                 description: 'Permanently removes a caregiver profile and associated files from the platform.',
                 auth: 'Superadmin Only',
-                headers: { 'x-auth-token': '<superadmin_jwt>' },
+                headers: { 'Authorization': 'Bearer <superadmin_jwt>' },
                 params: { id: { type: 'string', required: true, description: 'Caregiver Profile ID' } },
                 responses: [
                     { status: 200, description: 'Profile removed', example: { msg: 'Caregiver profile deleted successfully' } },
                     { status: 403, description: 'Forbidden (regular admins cannot delete profiles)' }
                 ],
                 exampleCurl: `curl -X DELETE https://nodejsbabysitterbookingplatformbackend.onrender.com/api/admin/babysitters/64b000000000000000000012 \\
-  -H "x-auth-token: YOUR_SUPERADMIN_JWT"`
+  -H "Authorization: Bearer YOUR_SUPERADMIN_JWT"`
             },
             {
                 method: 'GET',
                 path: '/api/admin/babysitters/:id/documents/:kind',
                 summary: 'Admin: View Caregiver Legal Document',
-                description: 'Securely downloads or views confidential verification documents (national ID card or criminal background certificate).',
+                description: 'Securely downloads or views confidential verification documents ("photo", "nationalId", "passport", "residency").',
                 auth: 'Admin Only',
-                headers: { 'x-auth-token': '<admin_jwt>' },
+                headers: { 'Authorization': 'Bearer <admin_jwt>' },
                 params: {
                     id: { type: 'string', required: true, description: 'Caregiver Profile ID' },
-                    kind: { type: 'string', required: true, description: '"nationalIdCard" or "criminalRecord"' }
+                    kind: { type: 'string', required: true, description: '"photo", "nationalId", "passport", or "residency"' }
                 },
                 responses: [
-                    { status: 200, description: 'Binary file stream' }
+                    { status: 200, description: 'Binary file stream' },
+                    { status: 404, description: 'No document on file' }
                 ],
-                exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/admin/babysitters/64b000000000000000000012/documents/nationalIdCard \\
-  -H "x-auth-token: YOUR_ADMIN_JWT"`
+                exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/admin/babysitters/64b000000000000000000012/documents/nationalId \\
+  -H "Authorization: Bearer YOUR_ADMIN_JWT"`
             },
             {
                 method: 'GET',
@@ -788,13 +916,86 @@ const API_CATEGORIES = [
                 summary: 'Admin: View Caregiver Profile Photo',
                 description: 'Retrieves the profile picture of any caregiver during moderation.',
                 auth: 'Admin Only',
-                headers: { 'x-auth-token': '<admin_jwt>' },
+                headers: { 'Authorization': 'Bearer <admin_jwt>' },
                 params: { id: { type: 'string', required: true, description: 'Caregiver Profile ID' } },
                 responses: [
-                    { status: 200, description: 'Binary image stream' }
+                    { status: 200, description: 'Binary image stream' },
+                    { status: 404, description: 'Photo not found' }
                 ],
                 exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/admin/babysitters/64b000000000000000000012/photo \\
-  -H "x-auth-token: YOUR_ADMIN_JWT"`
+  -H "Authorization: Bearer YOUR_ADMIN_JWT"`
+            }
+        ]
+    },
+    {
+        id: 'notifications',
+        name: 'Push Notifications & Device Tokens',
+        basePath: '/api/notifications',
+        description: 'In-app notification history, unread counters, read receipts, and Firebase Cloud Messaging (FCM) device push token registration.',
+        endpoints: [
+            {
+                method: 'GET',
+                path: '/api/notifications',
+                summary: 'List User Notifications & Unread Count',
+                description: 'Retrieves up to 50 recent notifications for the authenticated user and the total unread count.',
+                auth: 'Authenticated (Any Role)',
+                headers: { 'Authorization': 'Bearer <jwt_token>' },
+                responses: [
+                    { status: 200, description: 'Notifications and unread count', example: { notifications: [{ _id: '64e...', title: 'New Booking Request 📅', message: 'Dina requested babysitting for Nov 10.', read: false, createdAt: '2026-10-21T18:00:00Z' }], unreadCount: 1 } },
+                    { status: 401, description: 'Authentication required' }
+                ],
+                exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/notifications \\
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"`
+            },
+            {
+                method: 'PATCH',
+                path: '/api/notifications/:id/read',
+                summary: 'Mark Notification as Read',
+                description: 'Marks a specific user notification as read.',
+                auth: 'Authenticated (Notification Recipient)',
+                headers: { 'Authorization': 'Bearer <jwt_token>' },
+                params: { id: { type: 'string', required: true, description: 'Notification ID' } },
+                responses: [
+                    { status: 200, description: 'Notification marked as read', example: { _id: '64e...', read: true } },
+                    { status: 404, description: 'Notification not found' }
+                ],
+                exampleCurl: `curl -X PATCH https://nodejsbabysitterbookingplatformbackend.onrender.com/api/notifications/64e000000000000000000040/read \\
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"`
+            },
+            {
+                method: 'PATCH',
+                path: '/api/notifications/read-all',
+                summary: 'Mark All Notifications as Read',
+                description: 'Marks all unread notifications for the authenticated user as read in bulk.',
+                auth: 'Authenticated (Any Role)',
+                headers: { 'Authorization': 'Bearer <jwt_token>' },
+                responses: [
+                    { status: 200, description: 'All notifications marked as read', example: { msg: 'All notifications marked as read' } }
+                ],
+                exampleCurl: `curl -X PATCH https://nodejsbabysitterbookingplatformbackend.onrender.com/api/notifications/read-all \\
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"`
+            },
+            {
+                method: 'POST',
+                path: '/api/notifications/register-token',
+                summary: 'Register FCM Device Push Token',
+                description: 'Registers an Expo / Firebase Cloud Messaging device push token for the authenticated user to receive native push notifications.',
+                auth: 'Authenticated (Any Role)',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Bearer <jwt_token>'
+                },
+                body: {
+                    token: { type: 'string', required: true, description: 'FCM / Expo push notification device token string' }
+                },
+                responses: [
+                    { status: 200, description: 'Push token registered successfully', example: { msg: 'FCM push token registered successfully' } },
+                    { status: 400, description: 'Valid FCM token required' }
+                ],
+                exampleCurl: `curl -X POST https://nodejsbabysitterbookingplatformbackend.onrender.com/api/notifications/register-token \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \\
+  -d '{"token":"ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]"}'`
             }
         ]
     }
