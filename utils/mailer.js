@@ -1,17 +1,17 @@
-const defaultFrom = 'CareNest <onboarding@resend.dev>';
+const nodemailer = require('nodemailer');
 
-async function sendEmail({ to, subject, html, text }) {
+const defaultResendFrom = 'CareNest <onboarding@resend.dev>';
+
+async function sendViaResend({ to, subject, html, text }) {
     const apiKey = process.env.RESEND_API_KEY;
     if (!apiKey) {
         throw new Error('RESEND_API_KEY is not configured');
     }
 
-    let from = process.env.RESEND_FROM_EMAIL || defaultFrom;
-    // Resend requires a verified domain to send from personal/custom domains like gmail.com.
-    // Fall back to the default test sender if a free webmail domain is specified without verification.
+    let from = process.env.RESEND_FROM_EMAIL || defaultResendFrom;
     if (/@(gmail|yahoo|hotmail|outlook)\.com/i.test(from)) {
-        console.warn(`[Mailer] '${from}' is a public webmail domain and cannot be used directly with Resend without domain verification. Falling back to '${defaultFrom}'.`);
-        from = defaultFrom;
+        console.warn(`[Mailer] '${from}' is a public webmail domain and cannot be used directly with Resend without domain verification. Falling back to '${defaultResendFrom}'.`);
+        from = defaultResendFrom;
     }
 
     const payload = {
@@ -33,10 +33,37 @@ async function sendEmail({ to, subject, html, text }) {
 
     let data = await response.json().catch(() => ({}));
 
-    // If it failed because of an unverified from domain, try once more with onboarding@resend.dev
-    if (!response.ok && data?.name === 'validation_error' && from !== defaultFrom) {
-        console.warn(`[Mailer] Resend rejected '${from}'. Retrying with '${defaultFrom}'...`);
-        payload.from = defaultFrom;
+    // If it failed because of unverified sender domain, retry once with onboarding@resend.dev
+    if (!response.ok && data?.name === 'validation_error' && from !== defaultResendFrom) {
+        console.warn(`[Mailer] Resend rejected '${from}'. Retrying with '${defaultResendFrom}'...`);
+        payload.from = defaultResendFrom;
+        response = await fetch('https://api.resend.com/emails', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(payload),
+        });
+        data = await response.json().catch(() => ({}));
+    }
+
+    // Resend test-tier recipient restriction:
+    if (!response.ok && data?.statusCode === 403 && data?.message?.includes('You can only send testing emails to your own email address')) {
+        const match = data.message.match(/\(([^)]+)\)/);
+        const verifiedOwnerEmail = match ? match[1] : 'dinamansour2000@gmail.com';
+        const originalRecipient = Array.isArray(to) ? to.join(', ') : to;
+
+        console.warn(`[Mailer] Resend test domain restriction: recipient '${originalRecipient}' is not the Resend account owner. Rerouting to verified email '${verifiedOwnerEmail}' for testing...`);
+
+        payload.to = [verifiedOwnerEmail];
+        payload.subject = `[Test for ${originalRecipient}] ${subject}`;
+        payload.html = `
+          <div style="padding: 12px 16px; margin-bottom: 20px; background-color: #fff3cd; border: 1px solid #ffeeba; border-radius: 8px; color: #856404; font-size: 13px; line-height: 1.5;">
+            <strong>Resend Testing Mode:</strong> This email was requested for <code>${originalRecipient}</code>. Because Resend's test sender (<code>onboarding@resend.dev</code>) can only deliver to the Resend account owner's inbox, it was safely routed to your verified email (<code>${verifiedOwnerEmail}</code>).
+          </div>
+        ` + html;
+
         response = await fetch('https://api.resend.com/emails', {
             method: 'POST',
             headers: {
@@ -54,7 +81,68 @@ async function sendEmail({ to, subject, html, text }) {
         throw new Error(`Email delivery failed: ${errorMsg}`);
     }
 
-    return data;
+    return { id: data.id, provider: 'resend' };
+}
+
+async function sendViaGmail({ to, subject, html, text }) {
+    const user = process.env.GMAIL_USER || process.env.SMTP_USER || process.env.EMAIL_USER;
+    const pass = process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_PASS || process.env.SMTP_PASS || process.env.EMAIL_PASS;
+
+    if (!user || !pass) {
+        throw new Error('Gmail SMTP credentials are not configured (GMAIL_USER, GMAIL_APP_PASSWORD)');
+    }
+
+    const transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+            user,
+            pass: pass.replace(/\s+/g, ''),
+        },
+    });
+
+    const from = process.env.GMAIL_FROM || `CareNest <${user}>`;
+    const info = await transporter.sendMail({
+        from,
+        to: Array.isArray(to) ? to.join(', ') : to,
+        subject,
+        text,
+        html,
+    });
+
+    console.log(`[Mailer] Email delivered via Gmail SMTP to: ${to} (Message ID: ${info.messageId})`);
+    return { id: info.messageId, provider: 'gmail' };
+}
+
+async function sendEmail({ to, subject, html, text }) {
+    const gmailUser = process.env.GMAIL_USER || process.env.SMTP_USER || process.env.EMAIL_USER;
+    const gmailPass = process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_PASS || process.env.SMTP_PASS || process.env.EMAIL_PASS;
+    const provider = (process.env.EMAIL_PROVIDER || '').toLowerCase();
+
+    // 1. Explicit Resend provider preference
+    if (provider === 'resend') {
+        return sendViaResend({ to, subject, html, text });
+    }
+
+    // 2. Gmail SMTP if credentials provided (or provider === 'gmail')
+    if (gmailUser && gmailPass) {
+        try {
+            return await sendViaGmail({ to, subject, html, text });
+        } catch (gmailError) {
+            console.error('[Mailer] Gmail SMTP delivery failed:', gmailError.message);
+            if (process.env.RESEND_API_KEY) {
+                console.warn('[Mailer] Falling back to Resend API...');
+                return sendViaResend({ to, subject, html, text });
+            }
+            throw gmailError;
+        }
+    }
+
+    // 3. Resend API
+    if (process.env.RESEND_API_KEY) {
+        return sendViaResend({ to, subject, html, text });
+    }
+
+    throw new Error('No email provider is configured. Please provide GMAIL_USER and GMAIL_APP_PASSWORD, or RESEND_API_KEY in backend/.env.');
 }
 
 async function sendPasswordResetEmail({ to, resetUrl, name }) {
@@ -115,6 +203,7 @@ async function sendPasswordResetEmail({ to, resetUrl, name }) {
 
 module.exports = {
     sendEmail,
+    sendViaGmail,
+    sendViaResend,
     sendPasswordResetEmail,
 };
-

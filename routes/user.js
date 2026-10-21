@@ -500,6 +500,8 @@ router.post('/forgot-password', async (req, res) => {
         const cleanBaseUrl = frontendUrl.replace(/\/+$/, '');
         const resetUrl = `${cleanBaseUrl}/?token=${token}`;
 
+        console.log(`[PASSWORD RESET LINK for ${user.email}]: ${resetUrl}`);
+
         try {
             await sendPasswordResetEmail({
                 to: user.email,
