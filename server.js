@@ -8,6 +8,31 @@ app.disable('x-powered-by');
 app.use(cors());
 app.use(express.json({ limit: '10kb' }));
 
+// Root API documentation endpoints
+const { getApiCatalog } = require('./docs/apiCatalog');
+const { renderHtmlDocs } = require('./docs/htmlRenderer');
+
+const docsHandler = (req, res) => {
+    const catalog = getApiCatalog();
+    const wantsJson = req.query.format === 'json' || req.path.endsWith('.json') || (req.accepts('json') && !req.accepts('html'));
+
+    if (wantsJson) {
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        return res.json(catalog);
+    }
+
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(renderHtmlDocs(catalog));
+};
+
+app.get('/', docsHandler);
+app.get('/docs', docsHandler);
+app.get('/docs.json', (req, res) => {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    return res.json(getApiCatalog());
+});
+app.get('/api', docsHandler);
+
 app.use('/api/user', require('./routes/user'));
 app.use('/api/babysitter', require('./routes/babysitter'));
 app.use('/api/bookings', require('./routes/bookings'));

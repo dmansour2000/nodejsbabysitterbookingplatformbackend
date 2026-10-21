@@ -2,6 +2,14 @@
 
 This repository contains the Express and MongoDB API for CareNest. The React frontend is maintained separately and is published at [dmansour2000.github.io/reactjsbabysitterbookingplatformfrontend](https://dmansour2000.github.io/reactjsbabysitterbookingplatformfrontend).
 
+## API Documentation
+
+The backend includes a comprehensive, interactive documentation dashboard hosted at the root endpoint:
+- **Interactive Web Interface:** [`https://nodejsbabysitterbookingplatformbackend.onrender.com/`](https://nodejsbabysitterbookingplatformbackend.onrender.com/) (or `http://localhost:5170/`)
+- **Raw JSON Specification:** [`https://nodejsbabysitterbookingplatformbackend.onrender.com/?format=json`](https://nodejsbabysitterbookingplatformbackend.onrender.com/?format=json) or `/docs.json`
+
+The documentation covers all 40+ endpoints with HTTP methods, summaries, parameters, authentication requirements, request schemas, status codes, and ready-to-run cURL snippets.
+
 ## Requirements
 
 - Node.js (the project currently declares Node.js 23.5)
