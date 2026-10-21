@@ -11,7 +11,7 @@ const API_METADATA = {
     authentication: {
         type: 'JWT (JSON Web Token)',
         headers: ['Authorization: Bearer <token>', 'x-auth-token: <token>'],
-        description: 'Include the signed JWT token returned from /api/user/login, /api/user/register, /api/babysitter/register, or /api/user/oauth in either the "Authorization: Bearer <token>" or "x-auth-token: <token>" HTTP header for all protected endpoints. Note: Administrative accounts are strictly restricted to the web dashboard and cannot log into mobile clients (identified via "x-client-platform: mobile" header or "platform: mobile" body parameter).',
+        description: 'Include the signed JWT token returned from /api/user/login, /api/user/register, /api/babysitter/register, or /api/user/oauth in either the "Authorization: Bearer <token>" or "x-auth-token: <token>" HTTP header for all protected endpoints. Protected media streaming endpoints (such as caregiver photos and document previews embedded in HTML <img> or React Native <Image> tags) also support authentication via the "?token=<token>" URL query parameter. Note: Administrative accounts are strictly restricted to the web dashboard and cannot log into mobile clients (identified via "x-client-platform: mobile" header or "platform: mobile" body parameter).',
         example: 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'
     }
 };
@@ -168,7 +168,7 @@ const API_CATEGORIES = [
                 method: 'POST',
                 path: '/api/user/forgot-password',
                 summary: 'Request Password Reset Link',
-                description: 'Sends a password recovery email containing a secure 15-minute token link pointing to https://dmansour2000.github.io/?token=...',
+                description: 'Sends a branded CareNest password recovery email containing a secure 15-minute token link pointing to https://dmansour2000.github.io/#/reset-password?token=...',
                 auth: 'Public',
                 headers: { 'Content-Type': 'application/json' },
                 body: {
@@ -415,9 +415,12 @@ const API_CATEGORIES = [
                 method: 'GET',
                 path: '/api/babysitter/profile/photo',
                 summary: 'Get Own Caregiver Photo',
-                description: 'Streams the profile image of the currently logged-in caregiver.',
+                description: 'Streams the profile image of the currently logged-in caregiver. Supports authentication via Authorization header or ?token=<jwt> query parameter for direct <img> or <Image> embedding.',
                 auth: 'Authenticated (Caregiver)',
-                headers: { 'Authorization': 'Bearer <jwt_token>' },
+                headers: { 'Authorization': 'Bearer <jwt_token> (or ?token=<jwt> query param)' },
+                query: {
+                    token: { type: 'string', required: false, description: 'Optional JWT token alternative to Authorization header for direct media streaming' }
+                },
                 responses: [
                     { status: 200, description: 'Binary image stream' },
                     { status: 404, description: 'No photo uploaded' }
@@ -429,10 +432,13 @@ const API_CATEGORIES = [
                 method: 'GET',
                 path: '/api/babysitter/profile/documents/:kind',
                 summary: 'Get Own Verification Document',
-                description: 'Streams the caregiver’s own uploaded legal document ("nationalId", "passport", "residency", or document index 0 or 1).',
+                description: 'Streams the caregiver’s own uploaded legal document ("nationalId", "passport", "residency", or document index 0 or 1). Supports ?token=<jwt> query parameter.',
                 auth: 'Authenticated (Caregiver)',
-                headers: { 'Authorization': 'Bearer <jwt_token>' },
+                headers: { 'Authorization': 'Bearer <jwt_token> (or ?token=<jwt> query param)' },
                 params: { kind: { type: 'string', required: true, description: '"nationalId", "passport", "residency", "0", or "1"' } },
+                query: {
+                    token: { type: 'string', required: false, description: 'Optional JWT token alternative for direct browser/webview document viewing' }
+                },
                 responses: [
                     { status: 200, description: 'Binary file stream' },
                     { status: 404, description: 'Document not found' }
@@ -465,13 +471,16 @@ const API_CATEGORIES = [
             {
                 method: 'GET',
                 path: '/api/babysitter/photo/:id',
-                summary: 'Get Public Caregiver Photo',
-                description: 'Streams the profile picture of an approved caregiver.',
-                auth: 'Public',
+                summary: 'Get Caregiver Photo (Public / Authenticated Owner)',
+                description: 'Streams the profile picture of an approved caregiver. If the caregiver profile is still pending moderation, the authenticated caregiver who owns the profile can stream their own photo by providing their session token via "?token=<jwt>" query parameter or Authorization header.',
+                auth: 'Public (Approved) / Authenticated Caregiver Owner (Pending)',
                 params: { id: { type: 'string', required: true, description: 'Caregiver profile ID' } },
+                query: {
+                    token: { type: 'string', required: false, description: 'JWT authentication token allowing caregivers to stream their own photo during pending moderation' }
+                },
                 responses: [
                     { status: 200, description: 'Binary image stream' },
-                    { status: 404, description: 'Photo not found' }
+                    { status: 404, description: 'Photo not found or profile pending approval without owner authentication' }
                 ],
                 exampleCurl: `curl -X GET https://nodejsbabysitterbookingplatformbackend.onrender.com/api/babysitter/photo/64a000000000000000000012`
             },

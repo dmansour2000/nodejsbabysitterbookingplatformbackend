@@ -9,6 +9,7 @@ app.use(cors());
 app.use(express.json({ limit: '10kb' }));
 
 // Root API documentation endpoints
+const path = require('path');
 const { getApiCatalog } = require('./docs/apiCatalog');
 const { renderHtmlDocs } = require('./docs/htmlRenderer');
 
@@ -25,6 +26,11 @@ const docsHandler = (req, res) => {
     return res.send(renderHtmlDocs(catalog));
 };
 
+const iconPath = path.join(__dirname, 'docs', 'carenest-icon.png');
+app.get('/favicon.ico', (req, res) => {
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.sendFile(iconPath);
+});
 app.get('/', docsHandler);
 app.get('/docs', docsHandler);
 app.get('/docs.json', (req, res) => {

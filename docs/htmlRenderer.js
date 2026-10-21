@@ -2,6 +2,7 @@
  * Renders an interactive, responsive, modern HTML API Documentation page.
  * Self-contained: No external CDN dependencies required.
  */
+const { CARENEST_ICON_DATA_URI } = require('./carenestIcon');
 
 function escapeHtml(str) {
     if (!str) return '';
@@ -173,7 +174,8 @@ function renderHtmlDocs(catalog) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${escapeHtml(catalog.title)}</title>
-    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>👶</text></svg>">
+    <link rel="icon" type="image/png" href="${CARENEST_ICON_DATA_URI}">
+    <link rel="apple-touch-icon" href="${CARENEST_ICON_DATA_URI}">
     <style>
         :root {
             --bg-page: #f8fafc;
@@ -220,11 +222,32 @@ function renderHtmlDocs(catalog) {
             max-width: 1200px;
             margin: 0 auto;
         }
+        .hero-header-top {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            margin-bottom: 16px;
+        }
+        .hero-logo-img {
+            width: 58px;
+            height: 58px;
+            border-radius: 14px;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+            border: 2px solid rgba(255, 255, 255, 0.25);
+            object-fit: cover;
+            flex-shrink: 0;
+            background: #ffffff;
+        }
+        .hero-header-titles {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
         .hero-brand {
             display: flex;
             align-items: center;
             gap: 12px;
-            margin-bottom: 12px;
+            margin-bottom: 4px;
         }
         .hero-badge {
             display: inline-flex;
@@ -251,7 +274,7 @@ function renderHtmlDocs(catalog) {
             font-size: 32px;
             font-weight: 800;
             line-height: 1.2;
-            margin-bottom: 12px;
+            margin-bottom: 0;
         }
         .hero-desc {
             font-size: 16px;
@@ -687,7 +710,9 @@ function renderHtmlDocs(catalog) {
         }
 
         @media (max-width: 768px) {
-            .hero-title { font-size: 24px; }
+            .hero-header-top { align-items: flex-start; gap: 14px; }
+            .hero-logo-img { width: 46px; height: 46px; border-radius: 10px; }
+            .hero-title { font-size: 22px; }
             .hero-actions { margin-left: 0; width: 100%; justify-content: flex-start; }
             .endpoint-header { flex-direction: column; align-items: flex-start; }
             .endpoint-summary-wrapper { width: 100%; justify-content: space-between; }
@@ -698,10 +723,15 @@ function renderHtmlDocs(catalog) {
 
     <header class="hero-banner">
         <div class="hero-inner">
-            <div class="hero-brand">
-                <span class="hero-badge"><span class="status-dot"></span> API v${escapeHtml(catalog.version)} &bull; Operational</span>
+            <div class="hero-header-top">
+                <img class="hero-logo-img" src="${CARENEST_ICON_DATA_URI}" alt="CareNest Logo" width="58" height="58">
+                <div class="hero-header-titles">
+                    <div class="hero-brand">
+                        <span class="hero-badge"><span class="status-dot"></span> API v${escapeHtml(catalog.version)} &bull; Operational</span>
+                    </div>
+                    <h1 class="hero-title">${escapeHtml(catalog.title)}</h1>
+                </div>
             </div>
-            <h1 class="hero-title">${escapeHtml(catalog.title)}</h1>
             <p class="hero-desc">${escapeHtml(catalog.description)}</p>
             <div class="hero-details-row">
                 <span><strong>Base URL:</strong></span>

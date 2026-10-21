@@ -50,5 +50,9 @@ test('HTML renderer produces complete HTML documentation', () => {
     assert.ok(html.includes('/api/admin'), 'HTML must contain admin paths');
     assert.ok(html.includes('/api/notifications'), 'HTML must contain notifications paths');
     assert.ok(catalog.categories.some(c => c.id === 'notifications'), 'Catalog must have notifications category');
+    assert.ok(!html.includes('👶'), 'HTML must not contain the placeholder baby emoji');
+    assert.ok(html.includes('rel="icon" type="image/png"'), 'Favicon must be PNG');
+    assert.ok(html.includes('class="hero-logo-img"'), 'Hero banner must contain branded app logo image');
+    assert.ok(html.includes('data:image/png;base64,'), 'CareNest logo must be embedded as base64 data URI');
 });
 
