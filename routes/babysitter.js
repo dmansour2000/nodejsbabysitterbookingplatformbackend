@@ -9,6 +9,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const Booking = require('../models/Booking');
+const Review = require('../models/Review');
+const { sendNotification } = require('../services/notificationService');
 const { saveFileToDatabase, serveFile, deleteStoredFile, privateDir } = require('../utils/fileStorage');
 
 const upload = multer({
@@ -182,11 +184,55 @@ router.post('/profile/documents', auth, (req, res, next) => {
     } catch (err) { Object.values(files).flat().forEach((f) => fs.unlink(f.path, () => {})); res.status(500).json({ msg: 'Unable to save uploaded documents' }); }
 });
 
+async function getRatingStats(caregiverId) {
+    try {
+        const stats = await Review.aggregate([
+            { $match: { caregiverId: new mongoose.Types.ObjectId(caregiverId) } },
+            {
+                $group: {
+                    _id: '$caregiverId',
+                    averageRating: { $avg: '$rating' },
+                    ratingsCount: { $sum: 1 }
+                }
+            }
+        ]);
+        if (!stats || stats.length === 0) {
+            return { averageRating: 5.0, ratingsCount: 0 };
+        }
+        return {
+            averageRating: Number(stats[0].averageRating.toFixed(1)),
+            ratingsCount: stats[0].ratingsCount
+        };
+    } catch (_) {
+        return { averageRating: 5.0, ratingsCount: 0 };
+    }
+}
+
 // Get all babysitters (show all approved caregivers, with busy status only if booked and accepted)
 router.get('/', async (req, res) => {
     try {
-        const acceptedIds = await Booking.distinct('babysitterId', { status: 'accepted' });
-        const babysitters = await Babysitter.find({ moderationStatus: 'approved' }).select('+photoFile -nationalIdFile -passportFile -residencyFile -__v');
+        const [acceptedIds, ratingAggs, babysitters] = await Promise.all([
+            Booking.distinct('babysitterId', { status: 'accepted' }),
+            Review.aggregate([
+                {
+                    $group: {
+                        _id: '$caregiverId',
+                        averageRating: { $avg: '$rating' },
+                        ratingsCount: { $sum: 1 }
+                    }
+                }
+            ]),
+            Babysitter.find({ moderationStatus: 'approved' }).select('+photoFile -nationalIdFile -passportFile -residencyFile -__v')
+        ]);
+
+        const ratingMap = new Map();
+        ratingAggs.forEach((r) => {
+            ratingMap.set(String(r._id), {
+                averageRating: Number(r.averageRating.toFixed(1)),
+                ratingsCount: r.ratingsCount
+            });
+        });
+
         res.json(babysitters.map((sitter) => {
             const profile = sitter.toObject();
             profile.photoUrl = profile.photoFile ? `/api/babysitter/photo/${sitter._id}` : null;
@@ -195,6 +241,11 @@ router.get('/', async (req, res) => {
             profile.isBookedAndAccepted = Boolean(isBookedAndAccepted);
             profile.isAvailable = !isBookedAndAccepted;
             profile.available = !isBookedAndAccepted;
+
+            const stats = ratingMap.get(String(sitter._id)) || { averageRating: 5.0, ratingsCount: 0 };
+            profile.averageRating = stats.averageRating;
+            profile.ratingsCount = stats.ratingsCount;
+
             delete profile.phone;
             delete profile.photoFile;
             delete profile.nationalIdFile;
@@ -216,13 +267,23 @@ router.get('/users/:id', async (req, res) => {
             : { userId: id, moderationStatus: 'approved' };
         const user = await Babysitter.findOne(query).select('+photoFile -nationalIdFile -passportFile -residencyFile -__v');
         if (!user) return res.status(404).json({ msg: 'Babysitter profile is not available' });
-        const accepted = user.hasAcceptedBooking === true || await Booking.exists({ babysitterId: user._id, status: 'accepted' });
+
+        const [accepted, stats, reviews] = await Promise.all([
+            user.hasAcceptedBooking === true || await Booking.exists({ babysitterId: user._id, status: 'accepted' }),
+            getRatingStats(user._id),
+            Review.find({ caregiverId: user._id }).sort({ createdAt: -1 }).limit(30).lean()
+        ]);
+
         const result = user.toObject();
         result.photoUrl = user.photoFile ? `/api/babysitter/photo/${user._id}` : null;
         result.hasAcceptedBooking = Boolean(accepted);
         result.isBookedAndAccepted = Boolean(accepted);
         result.isAvailable = !accepted;
         result.available = !accepted;
+        result.averageRating = stats.averageRating;
+        result.ratingsCount = stats.ratingsCount;
+        result.reviews = reviews;
+
         delete result.phone;
         delete result.photoFile;
         delete result.nationalIdFile;
@@ -231,6 +292,93 @@ router.get('/users/:id', async (req, res) => {
         res.json(result);
     } catch (err) {
         res.status(500).send('Server error');
+    }
+});
+
+// Submit a review and star rating for a caregiver
+router.post('/:id/reviews', auth, async (req, res) => {
+    if (req.user.role !== 'user') {
+        return res.status(403).json({ msg: 'Only registered family accounts can submit ratings and reviews' });
+    }
+
+    const { rating, title, description } = req.body || {};
+    const numRating = Number(rating);
+    if (!Number.isInteger(numRating) || numRating < 1 || numRating > 5) {
+        return res.status(400).json({ msg: 'Please provide a star rating between 1 and 5' });
+    }
+    if (!title || typeof title !== 'string' || !title.trim()) {
+        return res.status(400).json({ msg: 'A review title is required' });
+    }
+    if (!description || typeof description !== 'string' || !description.trim()) {
+        return res.status(400).json({ msg: 'A review description is required' });
+    }
+
+    try {
+        const sitter = await Babysitter.findById(req.params.id);
+        if (!sitter) {
+            return res.status(404).json({ msg: 'Caregiver profile not found' });
+        }
+
+        const reviewer = await User.findById(req.user.id).select('name username');
+        const reviewerName = reviewer?.name || reviewer?.username || 'Family Member';
+
+        const review = await Review.findOneAndUpdate(
+            { caregiverId: sitter._id, userId: req.user.id },
+            {
+                $set: {
+                    userName: reviewerName,
+                    rating: numRating,
+                    title: title.trim().slice(0, 120),
+                    description: description.trim().slice(0, 1000),
+                }
+            },
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+
+        // Notify the caregiver
+        if (sitter.userId) {
+            await sendNotification({
+                recipientId: sitter.userId,
+                type: 'rating_received',
+                title: 'New Rating & Review ⭐',
+                message: `${reviewerName} gave you a ${numRating}-star rating: "${title.trim()}"`,
+                data: {
+                    caregiverId: String(sitter._id),
+                    rating: String(numRating),
+                    reviewId: String(review._id),
+                }
+            });
+        }
+
+        const stats = await getRatingStats(sitter._id);
+        res.status(201).json({
+            msg: 'Review submitted successfully',
+            review,
+            stats,
+        });
+    } catch (err) {
+        console.error('Failed to submit review:', err.message);
+        res.status(500).json({ msg: 'Failed to submit review' });
+    }
+});
+
+// Get reviews for a caregiver
+router.get('/:id/reviews', async (req, res) => {
+    try {
+        if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+            return res.status(400).json({ msg: 'Invalid caregiver ID' });
+        }
+        const [reviews, stats] = await Promise.all([
+            Review.find({ caregiverId: req.params.id }).sort({ createdAt: -1 }).limit(50).lean(),
+            getRatingStats(req.params.id)
+        ]);
+        res.json({
+            reviews,
+            ...stats
+        });
+    } catch (err) {
+        console.error('Failed to load reviews:', err.message);
+        res.status(500).json({ msg: 'Failed to load reviews' });
     }
 });
 

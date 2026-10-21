@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const Booking = require('../models/Booking');
 const Babysitter = require('../models/Babysitter');
 const User = require('../models/User');
+const { sendNotification } = require('../services/notificationService');
 
 const router = express.Router();
 const allowedServices = ['cleaning', 'babysitting', 'cooking', 'elderlyCare'];
@@ -148,6 +149,21 @@ router.post('/', auth, currentAccount, async (req, res) => {
             childrenCount: count,
             notes: notes.trim()
         });
+
+        // Notify the caregiver about new booking request
+        if (sitter.userId) {
+            sendNotification({
+                recipientId: sitter.userId,
+                type: 'booking_requested',
+                title: 'New Booking Request 📅',
+                message: `You received a new ${service} booking request from ${req.account.name || req.account.username}.`,
+                data: {
+                    bookingId: String(booking._id),
+                    service,
+                }
+            }).catch((e) => console.warn('Booking notification error:', e.message));
+        }
+
         const result = await populated(Booking.findById(booking._id));
         res.status(201).json(result);
     } catch (err) {
@@ -245,6 +261,66 @@ router.patch('/:id/status', auth, currentAccount, async (req, res) => {
         if (status === 'accepted' || previousStatus === 'accepted') {
             await syncAcceptedBookingAvailability(booking.babysitterId);
         }
+
+        // Notify parties on status update
+        try {
+            if (status === 'accepted') {
+                const sitterProfile = await Babysitter.findById(booking.babysitterId).select('name');
+                sendNotification({
+                    recipientId: booking.parentId,
+                    type: 'booking_accepted',
+                    title: 'Booking Accepted! 🎉',
+                    message: `${sitterProfile?.name || 'Your caregiver'} accepted your booking request.`,
+                    data: {
+                        bookingId: String(booking._id),
+                        status: 'accepted',
+                    }
+                }).catch((e) => console.warn('Status notification error:', e.message));
+            } else if (status === 'cancelled') {
+                if (req.account.role === 'user') {
+                    const sitterProfile = await Babysitter.findById(booking.babysitterId).select('userId');
+                    if (sitterProfile?.userId) {
+                        sendNotification({
+                            recipientId: sitterProfile.userId,
+                            type: 'booking_cancelled',
+                            title: 'Booking Cancelled ⚠️',
+                            message: `Booking request from ${req.account.name || req.account.username} was cancelled.`,
+                            data: {
+                                bookingId: String(booking._id),
+                                status: 'cancelled',
+                            }
+                        }).catch((e) => console.warn('Status notification error:', e.message));
+                    }
+                } else if (req.account.role === 'babysitter') {
+                    const sitterProfile = await Babysitter.findById(booking.babysitterId).select('name');
+                    sendNotification({
+                        recipientId: booking.parentId,
+                        type: 'booking_cancelled',
+                        title: 'Booking Cancelled ⚠️',
+                        message: `${sitterProfile?.name || 'The caregiver'} cancelled the booking request.`,
+                        data: {
+                            bookingId: String(booking._id),
+                            status: 'cancelled',
+                        }
+                    }).catch((e) => console.warn('Status notification error:', e.message));
+                }
+            } else if (status === 'declined') {
+                const sitterProfile = await Babysitter.findById(booking.babysitterId).select('name');
+                sendNotification({
+                    recipientId: booking.parentId,
+                    type: 'booking_declined',
+                    title: 'Booking Request Declined',
+                    message: `${sitterProfile?.name || 'The caregiver'} declined the booking request.`,
+                    data: {
+                        bookingId: String(booking._id),
+                        status: 'declined',
+                    }
+                }).catch((e) => console.warn('Status notification error:', e.message));
+            }
+        } catch (notifErr) {
+            console.warn('Status notification dispatch error:', notifErr.message);
+        }
+
         const result = await populated(Booking.findById(booking._id));
         res.json(result);
     } catch (err) {

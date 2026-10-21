@@ -38,6 +38,7 @@ app.use('/api/babysitter', require('./routes/babysitter'));
 app.use('/api/bookings', require('./routes/bookings'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/blacklist', require('./routes/blacklist'));
+app.use('/api/notifications', require('./routes/notifications'));
 
 const PORT = process.env.PORT || 5170;
 
