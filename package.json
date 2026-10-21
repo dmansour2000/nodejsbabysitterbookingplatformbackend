@@ -8,8 +8,7 @@
     "test": "node --test"
   },
   "engines": {
-    "node": "23.5",
-    "npm": "10.8"
+    "node": ">=20.0.0"
   },
   "keywords": [],
   "author": "",
