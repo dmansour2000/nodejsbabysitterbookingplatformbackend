@@ -54,7 +54,7 @@ const router = express.Router();
 
 function auth(req, res, next) {
     const authorization = req.header('Authorization');
-    const token = (authorization?.startsWith('Bearer ') ? authorization.slice(7) : null) || req.header('x-auth-token');
+    const token = (authorization?.startsWith('Bearer ') ? authorization.slice(7) : null) || req.header('x-auth-token') || req.query?.token;
 
     if (!token) {
         return res.status(401).json({ msg: 'No token, authorization denied' });
@@ -192,11 +192,25 @@ router.patch('/availability', auth, async (req, res) => {
 });
 
 
-// An optional public photo is served only for an approved profile.
+// An optional public photo is served only for an approved profile, or if requested by the caregiver themselves.
 router.get('/photo/:id', async (req, res) => {
     try {
-        const sitter = await Babysitter.findOne({ _id: req.params.id, moderationStatus: 'approved' }).select('+photoFile');
-        if (!sitter || !sitter.photoFile) return res.sendStatus(404);
+        let sitter = await Babysitter.findOne({ _id: req.params.id, moderationStatus: 'approved' }).select('+photoFile');
+        if (!sitter || !sitter.photoFile) {
+            // Also allow the sitter themselves to view their own photo even if pending review
+            const authHeader = req.header('Authorization');
+            const token = (authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null) || req.header('x-auth-token') || req.query?.token;
+            if (token) {
+                try {
+                    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+                    const anySitter = await Babysitter.findById(req.params.id).select('+photoFile');
+                    if (anySitter?.photoFile && (anySitter.userId?.toString() === decoded.user?.id || decoded.user?.role === 'admin')) {
+                        return serveFile(anySitter.photoFile, res, { cacheControl: 'private, max-age=3600' });
+                    }
+                } catch (_) {}
+            }
+            return res.sendStatus(404);
+        }
         return serveFile(sitter.photoFile, res, { cacheControl: 'public, max-age=3600' });
     } catch (_) { res.sendStatus(404); }
 });
