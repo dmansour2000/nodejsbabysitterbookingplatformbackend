@@ -21,7 +21,10 @@ let detailHasAcceptedBooking = false;
 const acceptedCaregiverIds = [caregiverProfileId];
 
 const userModel = {
-  findOne: async (filter = {}) => filter.username ? loginUser : null,
+  findOne: async (filter = {}) => {
+    if (filter.email && filter._id?.$ne) return null;
+    return (filter.username || filter.email) ? loginUser : null;
+  },
   find: () => ({ limit: async () => [] }),
   findById: (id) => {
     const user = { _id: id || parentId, id: id || parentId, role: 'user', username: 'family', name: 'Family', password: 'hashed-password', email: 'family@example.com', save: async () => {} };
@@ -32,8 +35,13 @@ const userRouter = proxyquire('../routes/user', {
   '../models/User': userModel,
   '../models/Babysitter': {},
   '../models/Booking': {},
+  '../utils/mailer': { sendPasswordResetEmail: async () => ({ id: 'mock-mail-id' }) },
   'google-auth-library': { OAuth2Client: class { async verifyIdToken() { return { getPayload: () => googlePayload }; } } },
-  bcryptjs: { compare: async (candidate) => comparePassword && candidate === 'correct-password' },
+  bcryptjs: {
+    compare: async (candidate) => comparePassword && candidate === 'correct-password',
+    genSalt: async () => 'salt',
+    hash: async (pwd) => 'hashed-' + pwd,
+  },
 });
 const userApp = express();
 userApp.use(express.json());
@@ -326,4 +334,19 @@ test('PATCH /api/user/email updates the user email address when current password
     .send({ email: 'new-email@example.com', currentPassword: 'correct-password' });
   assert.equal(accepted.status, 200);
   assert.equal(accepted.body.email, 'new-email@example.com');
+});
+
+test('POST /api/user/forgot-password sends a password reset link and reset-password updates the password', async () => {
+  process.env.RESEND_API_KEY = 'test-resend-key';
+  const forgotResponse = await request(userApp)
+    .post('/api/user/forgot-password')
+    .send({ email: 'family@example.com' });
+  assert.equal(forgotResponse.status, 200);
+
+  const resetToken = jwt.sign({ id: parentId, purpose: 'password-reset' }, process.env.JWT_SECRET, { expiresIn: '15m' });
+  const resetResponse = await request(userApp)
+    .post('/api/user/reset-password')
+    .send({ token: resetToken, newPassword: 'brand-new-password123' });
+  assert.equal(resetResponse.status, 200);
+  assert.equal(resetResponse.body.msg, 'Password reset successful');
 });

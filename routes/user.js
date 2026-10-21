@@ -9,6 +9,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
+const { sendPasswordResetEmail } = require('../utils/mailer');
 const privateDir = path.join(__dirname, '..', 'private_uploads');
 
 const router = express.Router();
@@ -472,17 +473,47 @@ router.post('/forgot-password', async (req, res) => {
     }
 
     try {
-        const user = await User.findOne({ email: normalizedEmail });
+        let user = await User.findOne({ email: normalizedEmail });
+        
+        // Support Resend's delivery simulation address (delivered@resend.dev) for testing
+        if (!user && normalizedEmail === 'delivered@resend.dev') {
+            user = { id: '000000000000000000000000', email: 'delivered@resend.dev', name: 'Resend Test Recipient' };
+        }
+
         if (!user) {
             return res.json({ msg: 'If an account exists for that email, a password reset link has been sent.' });
         }
 
-        if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+        const apiKey = process.env.RESEND_API_KEY;
+        if (!apiKey) {
+            console.error('[Forgot Password] RESEND_API_KEY is not configured');
             return res.status(503).json({ msg: 'Password recovery email is not configured' });
+        }
+
+        const token = jwt.sign(
+            { id: user.id, purpose: 'password-reset' },
+            process.env.JWT_SECRET,
+            { expiresIn: '15m' }
+        );
+
+        const frontendUrl = process.env.FRONTEND_URL || 'https://dmansour2000.github.io/reactjsbabysitterbookingplatformfrontend';
+        const cleanBaseUrl = frontendUrl.replace(/\/+$/, '');
+        const resetUrl = `${cleanBaseUrl}/?token=${token}`;
+
+        try {
+            await sendPasswordResetEmail({
+                to: user.email,
+                resetUrl,
+                name: user.name || user.username,
+            });
+        } catch (mailError) {
+            console.error('[Forgot Password] Email sending failed:', mailError.message);
+            return res.status(500).json({ msg: 'Could not send recovery email. Please try again later.' });
         }
 
         res.json({ msg: 'If an account exists for that email, a password reset link has been sent.' });
     } catch (err) {
+        console.error('[Forgot Password] Server error:', err);
         res.status(500).json({ msg: 'Server error' });
     }
 });

@@ -43,6 +43,7 @@ fakeMulter.diskStorage = () => ({});
 const router = proxyquire('../routes/blacklist', {
   '../models/User': { findById: () => ({ select: async () => ({ role: 'admin' }) }) },
   '../models/BlacklistedCaregiver': model,
+  '../utils/fileStorage': { deleteStoredFile: async () => {}, storeUploadedFile: async () => {}, getStoredFileStream: async () => null },
   multer: fakeMulter,
   fs: { mkdirSync() {}, unlink(_file, callback) { callback?.(); } },
 });
@@ -120,6 +121,7 @@ test('admins can delete any report and its files are cleaned up', async () => {
       }),
       deleteOne: async () => {},
     },
+    '../utils/fileStorage': { deleteStoredFile: async () => {}, storeUploadedFile: async () => {}, getStoredFileStream: async () => null },
     multer: fakeMulter,
     fs: {
       mkdirSync() {},
