@@ -84,6 +84,55 @@ async function sendViaResend({ to, subject, html, text }) {
     return { id: data.id, provider: 'resend' };
 }
 
+async function sendViaBrevo({ to, subject, html, text }) {
+    const apiKey = process.env.BREVO_API_KEY;
+    if (!apiKey) {
+        throw new Error('BREVO_API_KEY is not configured');
+    }
+
+    const senderEmail = process.env.BREVO_SENDER_EMAIL || process.env.GMAIL_USER || 'abdelkareem.dina@gmail.com';
+    const senderName = process.env.BREVO_SENDER_NAME || 'CareNest';
+
+    const recipients = (Array.isArray(to) ? to : [to]).map((addr) => {
+        if (typeof addr === 'object' && addr?.email) {
+            return addr;
+        }
+        return { email: String(addr).trim() };
+    });
+
+    const payload = {
+        sender: {
+            name: senderName,
+            email: senderEmail,
+        },
+        to: recipients,
+        subject,
+        htmlContent: html,
+        textContent: text || html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+    };
+
+    const response = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+            'api-key': apiKey,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+        },
+        body: JSON.stringify(payload),
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+        const errorMsg = data?.message || response.statusText || 'Failed to send email via Brevo';
+        console.error('[Mailer] Brevo API error:', response.status, data);
+        throw new Error(`Brevo delivery failed: ${errorMsg}`);
+    }
+
+    console.log(`[Mailer] Email delivered via Brevo to: ${recipients.map(r => r.email).join(', ')} (Message ID: ${data.messageId})`);
+    return { id: data.messageId, provider: 'brevo' };
+}
+
 async function sendViaGmail({ to, subject, html, text }) {
     const user = process.env.GMAIL_USER || process.env.SMTP_USER || process.env.EMAIL_USER;
     const pass = process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_PASS || process.env.SMTP_PASS || process.env.EMAIL_PASS;
@@ -119,31 +168,35 @@ async function sendViaGmail({ to, subject, html, text }) {
 }
 
 async function sendEmail({ to, subject, html, text }) {
+    const provider = (process.env.EMAIL_PROVIDER || '').toLowerCase();
+    const brevoKey = process.env.BREVO_API_KEY;
+    const resendKey = process.env.RESEND_API_KEY;
     const gmailUser = process.env.GMAIL_USER || process.env.SMTP_USER || process.env.EMAIL_USER;
     const gmailPass = process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_PASS || process.env.SMTP_PASS || process.env.EMAIL_PASS;
-    const provider = (process.env.EMAIL_PROVIDER || 'gmail').toLowerCase();
 
-    // 1. Explicit Resend provider preference
+    // 1. Explicit provider selection
+    if (provider === 'brevo') {
+        return sendViaBrevo({ to, subject, html, text });
+    }
     if (provider === 'resend') {
         return sendViaResend({ to, subject, html, text });
     }
-
-    // 2. Default: Gmail SMTP
-    if (gmailUser && gmailPass) {
-        return await sendViaGmail({ to, subject, html, text });
-    }
-
-    // If default is gmail but credentials are not found in environment
     if (provider === 'gmail') {
-        throw new Error('Gmail SMTP credentials are not configured. Please set GMAIL_USER and GMAIL_APP_PASSWORD in your environment variables.');
+        return sendViaGmail({ to, subject, html, text });
     }
 
-    // 3. Fallback to Resend only if explicitly configured or non-gmail provider
-    if (process.env.RESEND_API_KEY) {
+    // 2. Default priority: Brevo (HTTP API, works on Render) -> Resend -> Gmail SMTP (local)
+    if (brevoKey) {
+        return sendViaBrevo({ to, subject, html, text });
+    }
+    if (gmailUser && gmailPass) {
+        return sendViaGmail({ to, subject, html, text });
+    }
+    if (resendKey) {
         return sendViaResend({ to, subject, html, text });
     }
 
-    throw new Error('No email provider is configured. Please provide GMAIL_USER and GMAIL_APP_PASSWORD in environment variables.');
+    throw new Error('No email provider is configured. Please provide BREVO_API_KEY, GMAIL_USER/GMAIL_APP_PASSWORD, or RESEND_API_KEY in environment variables.');
 }
 
 async function sendPasswordResetEmail({ to, resetUrl, name }) {

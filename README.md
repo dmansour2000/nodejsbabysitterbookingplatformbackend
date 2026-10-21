@@ -26,17 +26,23 @@ JWT_SECRET=<long-random-secret>
 SUPERADMIN_USERNAME=<initial-superadmin-username>
 SUPERADMIN_PASSWORD=<initial-superadmin-password>
 
-# Email Delivery - Option 1: Gmail SMTP (Recommended for development/testing without a custom domain)
+# Email Delivery - Option 1: Brevo (Recommended for Render Free Tier - HTTP API over port 443)
+# Sign up free at https://www.brevo.com and get your API key from Settings > SMTP & API > API Keys
+BREVO_API_KEY=<brevo-api-key-starting-with-xkeysib>
+BREVO_SENDER_EMAIL=<your-verified-email@gmail.com>
+BREVO_SENDER_NAME=CareNest
+
+# Email Delivery - Option 2: Gmail SMTP (For local testing; blocked on Render Free Tier)
 # Generate a 16-character App Password at: https://myaccount.google.com/apppasswords
 GMAIL_USER=<your-email@gmail.com>
 GMAIL_APP_PASSWORD=<16-character-google-app-password>
 
-# Email Delivery - Option 2: Resend (For production transactional email or API-based testing)
+# Email Delivery - Option 3: Resend (For custom domain production or API-based testing)
 RESEND_API_KEY=<resend-api-key>
 RESEND_FROM_EMAIL=CareNest <onboarding@resend.dev>
 
-# Optional Email Provider Switch: "gmail" or "resend" (defaults to gmail if credentials provided, else resend)
-# EMAIL_PROVIDER=gmail
+# Optional Email Provider Switch: "brevo", "gmail", or "resend"
+EMAIL_PROVIDER=brevo
 
 # Frontend & OAuth Settings
 FRONTEND_URL=https://dmansour2000.github.io/reactjsbabysitterbookingplatformfrontend
@@ -52,11 +58,14 @@ PORT=5170
 | `JWT_SECRET` | Required | Secret used to sign and verify JWT authentication and password recovery tokens. Generate a unique value with `node -e "console.log(require('crypto').randomBytes(64).toString('hex'))"`. |
 | `SUPERADMIN_USERNAME` | Required | Username for the initial superadmin account. |
 | `SUPERADMIN_PASSWORD` | Required | Password for the initial superadmin account. Use a strong, unique password. |
-| `GMAIL_USER` | Optional | Gmail address used to send transactional emails (e.g. password resets) via Gmail SMTP without domain verification restrictions. |
-| `GMAIL_APP_PASSWORD` | Optional | 16-character Google App Password (generated in Google Account > Security > 2-Step Verification > App Passwords). |
+| `BREVO_API_KEY` | Optional (Recommended) | Brevo API key (`xkeysib-...`) for sending via HTTPS REST API over port 443 (ideal for Render free tier). |
+| `BREVO_SENDER_EMAIL` | Optional | Verified sender email in your Brevo account (defaults to `GMAIL_USER` or `abdelkareem.dina@gmail.com`). |
+| `BREVO_SENDER_NAME` | Optional | Sender display name (defaults to `CareNest`). |
+| `GMAIL_USER` | Optional | Gmail address used to send transactional emails via Gmail SMTP (works on localhost; blocked by Render free tier). |
+| `GMAIL_APP_PASSWORD` | Optional | 16-character Google App Password. |
 | `RESEND_API_KEY` | Optional | Resend API key (`re_...`) for transactional email delivery. |
-| `RESEND_FROM_EMAIL` | Optional | Verified sender address in Resend (e.g. `CareNest <onboarding@resend.dev>` for testing, or `CareNest <support@yourdomain.com>` once a custom domain is verified). |
-| `EMAIL_PROVIDER` | Optional | Explicitly choose `"gmail"` or `"resend"`. Defaults to Gmail SMTP when credentials are set, falling back to Resend API. |
+| `RESEND_FROM_EMAIL` | Optional | Verified sender address in Resend. |
+| `EMAIL_PROVIDER` | Optional | Explicitly choose `"brevo"`, `"gmail"`, or `"resend"`. |
 | `FRONTEND_URL` | Required | Public URL of the frontend (e.g. `https://dmansour2000.github.io/reactjsbabysitterbookingplatformfrontend`). Used to construct password reset links. |
 | `GOOGLE_CLIENT_ID` | Optional | Google OAuth 2.0 Web Client ID used to verify Google Sign-In tokens on the backend. |
 | `PORT` | Optional | HTTP port. Defaults to `5170` locally; hosting providers supply it automatically. |
