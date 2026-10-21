@@ -114,6 +114,31 @@ test('login rejects an incorrect password and returns a signed user session for 
   assert.equal(typeof accepted.body.token, 'string');
 });
 
+test('login rejects admin accounts attempting to log in from mobile client', async () => {
+  comparePassword = true;
+  loginUser = { id: parentId, _id: parentId, username: 'adminuser', role: 'admin', password: 'hashed-password' };
+
+  const headerRejected = await request(userApp)
+    .post('/api/user/login')
+    .set('x-client-platform', 'mobile')
+    .send({ username: 'adminuser', password: 'correct-password' });
+  assert.equal(headerRejected.status, 403);
+  assert.match(headerRejected.body.msg, /Admin accounts can only be accessed through the web admin dashboard/i);
+
+  const bodyRejected = await request(userApp)
+    .post('/api/user/login')
+    .send({ username: 'adminuser', password: 'correct-password', platform: 'mobile' });
+  assert.equal(bodyRejected.status, 403);
+
+  const webAccepted = await request(userApp)
+    .post('/api/user/login')
+    .send({ username: 'adminuser', password: 'correct-password' });
+  assert.equal(webAccepted.status, 200);
+  assert.equal(webAccepted.body.user.role, 'admin');
+
+  loginUser = { id: parentId, _id: parentId, username: 'family', role: 'user', password: 'hashed-password' };
+});
+
 
 
 test('Google sign-in nonce endpoint issues a short-lived signed nonce', async () => {

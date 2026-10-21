@@ -210,6 +210,11 @@ router.post('/oauth', async (req, res) => {
             }
         }
 
+        const isMobileClient = req.header('x-client-platform') === 'mobile' || req.body?.platform === 'mobile';
+        if (isMobileClient && user.role === 'admin') {
+            return res.status(403).json({ msg: 'Admin accounts can only be accessed through the web admin dashboard' });
+        }
+
         let sitterName = null;
         let sitterPhotoUrl = null;
         if (user.role === 'babysitter') {
@@ -415,6 +420,11 @@ router.post('/login', async (req, res) => {
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ msg: 'Invalid credentials' });
+
+        const isMobileClient = req.header('x-client-platform') === 'mobile' || req.body?.platform === 'mobile';
+        if (isMobileClient && user.role === 'admin') {
+            return res.status(403).json({ msg: 'Admin accounts can only be accessed through the web admin dashboard' });
+        }
 
         let sitterName = null;
         let sitterPhotoUrl = null;
@@ -648,6 +658,12 @@ router.get('/', auth, async (req, res) => {
     try {
         const user = await User.findById(req.user.id).select('-password');
         if (!user) return res.status(404).json({ msg: 'User not found' });
+
+        const isMobileClient = req.header('x-client-platform') === 'mobile' || req.query?.platform === 'mobile';
+        if (isMobileClient && user.role === 'admin') {
+            return res.status(403).json({ msg: 'Admin accounts can only be accessed through the web admin dashboard' });
+        }
+
         const userObj = user.toObject();
         userObj.id = userObj._id;
         if (user.role === 'babysitter') {
