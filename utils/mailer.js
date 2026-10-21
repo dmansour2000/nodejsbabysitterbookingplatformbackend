@@ -98,6 +98,9 @@ async function sendViaGmail({ to, subject, html, text }) {
             user,
             pass: pass.replace(/\s+/g, ''),
         },
+        connectionTimeout: 10000, // 10s timeout
+        greetingTimeout: 10000,
+        socketTimeout: 15000,
     });
 
     const from = process.env.GMAIL_FROM || `CareNest <${user}>`;
