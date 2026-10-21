@@ -829,3 +829,4 @@ function renderHtmlDocs(catalog) {
 module.exports = {
     renderHtmlDocs
 };
+

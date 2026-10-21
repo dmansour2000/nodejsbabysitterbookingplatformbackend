@@ -10,7 +10,7 @@ const allowedServices = ['cleaning', 'babysitting', 'cooking', 'elderlyCare'];
 
 function auth(req, res, next) {
     const authorization = req.header('Authorization');
-    const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : null;
+    const token = (authorization?.startsWith('Bearer ') ? authorization.slice(7) : null) || req.header('x-auth-token');
     if (!token) return res.status(401).json({ msg: 'Authentication required' });
 
     try {
@@ -36,7 +36,7 @@ async function currentAccount(req, res, next) {
 function populated(query) {
     return query
         .populate('parentId', 'username name')
-        .populate({ path: 'babysitterId', select: 'name phone services userId', populate: { path: 'userId', select: 'username' } })
+        .populate({ path: 'babysitterId', select: 'name phone services userId photoFile', populate: { path: 'userId', select: 'username' } })
         .sort({ startAt: 1 });
 }
 
@@ -74,7 +74,15 @@ router.get('/', auth, currentAccount, async (req, res) => {
         }
 
         const bookings = await populated(Booking.find(filter));
-        res.json(bookings);
+        const formatted = bookings.map((b) => {
+            const item = b.toObject();
+            if (item.babysitterId && typeof item.babysitterId === 'object') {
+                item.babysitterId.photoUrl = item.babysitterId.photoFile ? `/api/babysitter/photo/${item.babysitterId._id}` : null;
+                delete item.babysitterId.photoFile;
+            }
+            return item;
+        });
+        res.json(formatted);
     } catch (err) {
         console.error('Unable to load bookings:', err.message);
         res.status(500).json({ msg: 'Unable to load bookings' });

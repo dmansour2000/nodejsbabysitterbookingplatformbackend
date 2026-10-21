@@ -49,3 +49,4 @@ test('HTML renderer produces complete HTML documentation', () => {
     assert.ok(html.includes('/api/blacklist'), 'HTML must contain blacklist paths');
     assert.ok(html.includes('/api/admin'), 'HTML must contain admin paths');
 });
+

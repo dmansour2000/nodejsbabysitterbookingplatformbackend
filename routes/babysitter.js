@@ -24,7 +24,7 @@ const router = express.Router();
 
 function auth(req, res, next) {
     const authorization = req.header('Authorization');
-    const token = authorization?.startsWith('Bearer ') ? authorization.slice(7) : null;
+    const token = (authorization?.startsWith('Bearer ') ? authorization.slice(7) : null) || req.header('x-auth-token');
 
     if (!token) {
         return res.status(401).json({ msg: 'No token, authorization denied' });
@@ -147,11 +147,11 @@ router.patch('/availability', auth, async (req, res) => {
 });
 
 
-// An optional public photo is served only for an approved, searchable profile.
+// An optional public photo is served only for an approved profile.
 router.get('/photo/:id', async (req, res) => {
     try {
-        const sitter = await Babysitter.findOne({ _id: req.params.id, moderationStatus: 'approved', available: true, hasAcceptedBooking: { $ne: true } }).select('+photoFile');
-        if (!sitter || !sitter.photoFile || await Booking.exists({ babysitterId: sitter._id, status: 'accepted' })) return res.sendStatus(404);
+        const sitter = await Babysitter.findOne({ _id: req.params.id, moderationStatus: 'approved' }).select('+photoFile');
+        if (!sitter || !sitter.photoFile) return res.sendStatus(404);
         return serveFile(sitter.photoFile, res, { cacheControl: 'public, max-age=3600' });
     } catch (_) { res.sendStatus(404); }
 });
@@ -182,14 +182,19 @@ router.post('/profile/documents', auth, (req, res, next) => {
     } catch (err) { Object.values(files).flat().forEach((f) => fs.unlink(f.path, () => {})); res.status(500).json({ msg: 'Unable to save uploaded documents' }); }
 });
 
-// Get all available babysitters
+// Get all babysitters (show all approved caregivers, with busy status only if booked and accepted)
 router.get('/', async (req, res) => {
     try {
         const acceptedIds = await Booking.distinct('babysitterId', { status: 'accepted' });
-        const babysitters = await Babysitter.find({ available: true, moderationStatus: 'approved', hasAcceptedBooking: { $ne: true }, _id: { $nin: acceptedIds } }).select('+photoFile -nationalIdFile -passportFile -residencyFile -__v');
+        const babysitters = await Babysitter.find({ moderationStatus: 'approved' }).select('+photoFile -nationalIdFile -passportFile -residencyFile -__v');
         res.json(babysitters.map((sitter) => {
             const profile = sitter.toObject();
             profile.photoUrl = profile.photoFile ? `/api/babysitter/photo/${sitter._id}` : null;
+            const isBookedAndAccepted = sitter.hasAcceptedBooking === true || acceptedIds.some((id) => String(id) === String(sitter._id));
+            profile.hasAcceptedBooking = Boolean(isBookedAndAccepted);
+            profile.isBookedAndAccepted = Boolean(isBookedAndAccepted);
+            profile.isAvailable = !isBookedAndAccepted;
+            profile.available = !isBookedAndAccepted;
             delete profile.phone;
             delete profile.photoFile;
             delete profile.nationalIdFile;
@@ -202,15 +207,22 @@ router.get('/', async (req, res) => {
     }
 });
 
-// Get a babysitter
-router.get('/users/:id', auth, async (req, res) => {
+// Get a babysitter profile
+router.get('/users/:id', async (req, res) => {
     try {
-        const user = await Babysitter.findOne({ userId: req.params.id, moderationStatus: 'approved', available: true, hasAcceptedBooking: { $ne: true } }).select('+photoFile -nationalIdFile -passportFile -residencyFile -__v');
+        const id = req.params.id;
+        const query = mongoose.Types.ObjectId.isValid(id)
+            ? { $or: [{ userId: id }, { _id: id }], moderationStatus: 'approved' }
+            : { userId: id, moderationStatus: 'approved' };
+        const user = await Babysitter.findOne(query).select('+photoFile -nationalIdFile -passportFile -residencyFile -__v');
         if (!user) return res.status(404).json({ msg: 'Babysitter profile is not available' });
-        const accepted = await Booking.exists({ babysitterId: user._id, status: 'accepted' });
-        if (accepted) return res.status(404).json({ msg: 'Babysitter profile is not available' });
+        const accepted = user.hasAcceptedBooking === true || await Booking.exists({ babysitterId: user._id, status: 'accepted' });
         const result = user.toObject();
         result.photoUrl = user.photoFile ? `/api/babysitter/photo/${user._id}` : null;
+        result.hasAcceptedBooking = Boolean(accepted);
+        result.isBookedAndAccepted = Boolean(accepted);
+        result.isAvailable = !accepted;
+        result.available = !accepted;
         delete result.phone;
         delete result.photoFile;
         delete result.nationalIdFile;
