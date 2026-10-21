@@ -459,9 +459,14 @@ router.get('/:id/reviews', async (req, res) => {
 
 // Register a new babysitter
 router.post('/register', async (req, res) => {
-    const { username, email, password, name, phone, age, nationality, services } = req.body;
-    if (typeof username !== 'string' || !username.trim() || typeof password !== 'string' || password.length < 8 || typeof name !== 'string' || !name.trim()) {
-        return res.status(400).json({ msg: 'Name, username, and a password of at least 8 characters are required' });
+    let { username, email, password, name, phone, age, nationality, services, city, bio, monthlySalary, currency } = req.body || {};
+    if (typeof name !== 'string' || !name.trim() || typeof password !== 'string' || password.length < 8) {
+        return res.status(400).json({ msg: 'Name and a password of at least 8 characters are required' });
+    }
+
+    if (!username || typeof username !== 'string' || !username.trim()) {
+        const base = (name.trim().toLowerCase().replace(/[^a-z0-9]/g, '') || 'sitter');
+        username = `${base}_${Math.floor(1000 + Math.random() * 9000)}`;
     }
 
     const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
@@ -473,7 +478,8 @@ router.post('/register', async (req, res) => {
         // Check if the user already exists
         let user = await User.findOne({ username: username.trim() });
         if (user) {
-            return res.status(400).json({ msg: 'User already exists' });
+            // Append random suffix to avoid collision
+            username = `${username}_${Math.floor(1000 + Math.random() * 9000)}`;
         }
         if (await User.findOne({ email: normalizedEmail })) {
             return res.status(409).json({ msg: 'Email is already registered to another account' });
@@ -495,14 +501,23 @@ router.post('/register', async (req, res) => {
         // Save the user
         await user.save();
 
+        let parsedServices = services;
+        if (typeof services === 'string') {
+            try { parsedServices = JSON.parse(services); } catch (_) { parsedServices = [services]; }
+        }
+
         // Create a new babysitter profile
         const babysitter = new Babysitter({
             userId: user.id,
-            name,
+            name: name.trim(),
             phone,
             age,
             nationality,
-            services
+            services: Array.isArray(parsedServices) ? parsedServices : ['babysitting'],
+            city,
+            bio,
+            monthlySalary: Number(monthlySalary) || undefined,
+            currency: currency || 'EGP'
         });
 
         // Save the babysitter profile
